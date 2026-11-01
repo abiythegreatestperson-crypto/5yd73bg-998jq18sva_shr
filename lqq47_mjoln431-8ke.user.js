@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.1.0
+// @version      1.1.1
 // @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -30,30 +30,29 @@
     ],
     wasmJs: 'stockfish-19-lite-single.js',
     wasmBin: 'stockfish-19-lite-single.wasm',
-    movetime: 300, 
-    probeTime: 120, 
+    movetime: 300,
+    probeTime: 120,
     multipvBridge: 8,
     multipvWasm: 6,
-    tier: { t1: 30, t2: 100, t3: 150 }, 
+    tier: { t1: 30, t2: 100, t3: 150 },
     bridgePingMs: 8000,
     bridgeAlivePingMs: 30000,
-    clockPollMs: 150, 
-    clockSettleMs: 350, 
-    clockTickMs: 1300, 
+    clockPollMs: 150,
+    clockSettleMs: 350,
+    clockTickMs: 1300,
   };
 
   try {
     if (typeof GM_getValue === 'function') {
       const t = GM_getValue('cch_test_config');
       if (t && typeof t === 'object') Object.assign(CFG, t);
-      if (t && typeof t === 'object' && typeof t.pathRe === 'string') CFG.pathRe = new RegExp(t.pathRe);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {}
 
   const DEFAULTS = {
     v: 1,
     elo: 3000,
-    style: 'bot', 
+    style: 'bot',
     tiers: { t1: true, t2: true, t3: true },
     pos: null,
   };
@@ -73,7 +72,7 @@
           const v = GM_getValue(k);
           return v === undefined ? d : v;
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
       try {
         const v = localStorage.getItem('cch:' + k);
         return v === null ? d : JSON.parse(v);
@@ -82,8 +81,8 @@
     set(k, v) {
       try {
         if (typeof GM_setValue === 'function') { GM_setValue(k, v); return; }
-      } catch (e) { /* ignore */ }
-      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) { /* ignore */ }
+      } catch (e) {}
+      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) {}
     },
   };
 
@@ -125,7 +124,7 @@
         });
       } catch (e) { fail(String(e && e.message || e)); }
     });
-    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) { /* ignore */ } };
+    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) {} };
     return p;
   }
 
@@ -318,7 +317,7 @@
 
   function diffInfo(prev, bd) {
     const arrivals = [], departures = [];
-    let colors = 0; 
+    let colors = 0;
     for (let i = 0; i < 64; i++) {
       if (bd[i] && bd[i] !== prev[i]) { arrivals.push(i); colors |= isWhitePc(bd[i]) ? 1 : 2; }
       if (prev[i] && !bd[i]) departures.push(i);
@@ -488,8 +487,8 @@
     const bestC = cs.find((c) => c.move === res.bestmove) || cs.reduce((a, b) => (b.score > a.score ? b : a), cs[0]);
     const safe = (c) => {
       if (c.loss > T.t3) return false;
-      if (c.score <= -90000 && best > -90000) return false; 
-      if (best >= 200 && c.score < 100) return false; 
+      if (c.score <= -90000 && best > -90000) return false;
+      if (best >= 200 && c.score < 100) return false;
       return true;
     };
     const tierOf = (c) => (!safe(c) ? 0 : c.loss <= T.t1 ? 1 : c.loss <= T.t2 ? 2 : 3);
@@ -542,6 +541,16 @@
     for (const c of cs) {
       const t = tierOf(c);
       if ((t === 2 || t === 3) && !tiers[t]) tiers[t] = c;
+    }
+    if (!tiers[3]) {
+      const used = new Set([bestC, pick, tiers[2]].filter(Boolean));
+      const rest = cs.filter((c) => !used.has(c));
+      if (rest.length) {
+        const risk = (c) => (c.score <= -90000 && best > -90000 ? 2 : 0) + (best >= 200 && c.score < 100 ? 1 : 0);
+        const bad = rest.filter((c) => c.loss > T.t2);
+        const pool = bad.length ? bad.sort((a, b) => risk(a) - risk(b) || a.loss - b.loss) : rest.sort((a, b) => b.loss - a.loss);
+        tiers[3] = pool[0];
+      }
     }
     const extra = pick !== bestC && pickTier === 1 ? pick : null;
     return { cs, best, bestC, pick, base, tiers, extra, tags, styleUsed, note, pickTier, evalScore: bestC.score, evalMate: bestC.mate };
@@ -622,7 +631,7 @@
       this.cfg = cfg;
       this.worker = null;
       this.state = 'idle';
-      this.failure = null; 
+      this.failure = null;
       this.booting = null;
       this.sink = null;
       this.applied = {};
@@ -643,7 +652,7 @@
             const hit = await c.match(url);
             if (hit) return { data: type === 'text' ? await hit.text() : await hit.arrayBuffer(), url };
           }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
         try {
           const r = await gmRequest({ url, responseType: type === 'text' ? 'text' : 'arraybuffer', timeout: 60000 });
           if (r.status !== 200) throw new Error('HTTP ' + r.status);
@@ -654,7 +663,7 @@
               const c = await caches.open('catur-bantu-v1');
               await c.put(url, new Response(data));
             }
-          } catch (e) { /* ignore */ }
+          } catch (e) {}
           return { data, url };
         } catch (e) { errs.push(url + ' -> ' + e.message); }
       }
@@ -670,7 +679,7 @@
 
     _fail(kind, msg) {
       this.state = 'failed'; this.failure = kind;
-      try { if (this.worker) this.worker.terminate(); } catch (e) { /* ignore */ }
+      try { if (this.worker) this.worker.terminate(); } catch (e) {}
       this.worker = null; this.applied = {}; this.searching = false;
       const s = this.sink; this.sink = null;
       const er = new Error(msg); er.kind = 'wasm'; er.wasmFailure = kind;
@@ -791,13 +800,13 @@
         return out;
       };
       const p = this.chain.then(run, run);
-      this.chain = p.catch(() => { /* ignore */ });
+      this.chain = p.catch(() => {});
       return p;
     }
 
     terminate() {
       this.gen++;
-      try { if (this.worker) this.worker.terminate(); } catch (e) { /* ignore */ }
+      try { if (this.worker) this.worker.terminate(); } catch (e) {}
       this.worker = null; this.state = 'idle'; this.applied = {}; this.sink = null; this.searching = false;
     }
   }
@@ -878,7 +887,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           '<div><div class="lbl" style="margin-bottom:6px">Panah</div><div class="chips">' +
             '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Terbaik</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t2"><span class="dot" style="background:' + TIER_COLOR[2] + '"></span>Biasa aja</label>' +
-            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Jelek tapi aman</label>' +
+            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Jelek</label>' +
           '</div></div>' +
           '<div class="status"><span class="led" data-r="led"></span><span data-r="status">Mulai…</span></div>' +
           '<details><summary>Debug</summary><pre data-r="debug"></pre>' +
@@ -929,7 +938,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         if (e.target.closest && e.target.closest('button')) return;
         id = e.pointerId; moved = false; sx = e.clientX; sy = e.clientY;
         const p = getXY(); ox = p[0]; oy = p[1];
-        try { handle.setPointerCapture(id); } catch (er) { /* ignore */ }
+        try { handle.setPointerCapture(id); } catch (er) {}
       });
       handle.addEventListener('pointermove', (e) => {
         if (id !== e.pointerId) return;
@@ -939,7 +948,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       });
       const end = (e) => {
         if (id !== e.pointerId) return;
-        try { handle.releasePointerCapture(id); } catch (er) { /* ignore */ }
+        try { handle.releasePointerCapture(id); } catch (er) {}
         id = null;
         if (moved) savePos(); else if (onTap) onTap();
       };
@@ -963,7 +972,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const done = () => dbg('disalin ' + t.length + ' karakter');
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done, () => fallback()); return; }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
       fallback();
       function fallback() {
         try {
@@ -1060,29 +1069,20 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         const f = idx & 7, r = idx >> 3;
         return [((flipped ? 7 - f : f) + 0.5) * sq, ((flipped ? r : 7 - r) + 0.5) * sq];
       };
-      const list = lastArrows.arrows.slice().sort((a, b) => ((a.emph ? 1 : 0) - (b.emph ? 1 : 0)) || (b.tier - a.tier)); 
+      const Z = { 0: 0, 3: 1, 2: 2, 1: 3 };
+      const list = lastArrows.arrows.slice().sort((a, b) => Z[a.tier] - Z[b.tier]);
       for (const a of list) {
         const p1 = ctr(sqIdx(a.move.slice(0, 2))), p2 = ctr(sqIdx(a.move.slice(2, 4)));
         let dx = p2[0] - p1[0], dy = p2[1] - p1[1];
         const len = Math.hypot(dx, dy) || 1;
         dx /= len; dy /= len;
-        const w = sq * (a.emph ? 0.2 : 0.14), head = sq * (a.emph ? 0.5 : 0.42);
+        const w = sq * 0.14, head = sq * 0.42;
         const sx = p1[0] + dx * sq * 0.18, sy = p1[1] + dy * sq * 0.18;
         const bx = p2[0] - dx * head * 0.9, by = p2[1] - dy * head * 0.9;
         const tx = p2[0] - dx * sq * 0.06, ty = p2[1] - dy * sq * 0.06;
         const nx = -dy, ny = dx, hw = head * 0.5;
         const g = document.createElementNS(NS_SVG, 'g');
         g.setAttribute('opacity', '0.86');
-        if (a.emph) {
-          const h = document.createElementNS(NS_SVG, 'line');
-          h.setAttribute('x1', sx); h.setAttribute('y1', sy); h.setAttribute('x2', bx); h.setAttribute('y2', by);
-          h.setAttribute('stroke', '#fff'); h.setAttribute('stroke-width', w + sq * 0.07); h.setAttribute('stroke-linecap', 'round');
-          g.appendChild(h);
-          const hp = document.createElementNS(NS_SVG, 'polygon');
-          hp.setAttribute('points', [tx + dx * sq * 0.04, ty + dy * sq * 0.04, bx + nx * (hw + sq * 0.04), by + ny * (hw + sq * 0.04), bx - nx * (hw + sq * 0.04), by - ny * (hw + sq * 0.04)].join(','));
-          hp.setAttribute('fill', '#fff');
-          g.appendChild(hp);
-        }
         const ln = document.createElementNS(NS_SVG, 'line');
         ln.setAttribute('x1', sx); ln.setAttribute('y1', sy); ln.setAttribute('x2', bx); ln.setAttribute('y2', by);
         ln.setAttribute('stroke', TIER_COLOR[a.tier]); ln.setAttribute('stroke-width', w); ln.setAttribute('stroke-linecap', 'round');
@@ -1112,13 +1112,19 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       host, setStatus, setSuggestion, drawArrows, relayout, renderSettings, renderDebug,
       setVisible(v) { host.style.display = v ? '' : 'none'; },
       destroy() {
-        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) { /* ignore */ }
+        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) {}
         host.remove();
       },
     };
   }
 
+  function onActivePage() {
+    return location.hostname === CFG.host;
+  }
+
   function init() {
+    if (!onActivePage()) return;
+
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
       dead: false, suspended: false,
@@ -1234,10 +1240,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.flipped = snap.flipped;
       if (S.me == null || placement === START_PLACEMENT) S.me = snap.flipped ? 'b' : 'w';
       S.dbg.me = S.me === 'w' ? 'putih' : 'hitam';
-      if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; } 
+      if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
 
       if (changedPos) {
-        cancelAnalysis(); 
+        cancelAnalysis();
         let turn = null, src = '';
         let diff = null;
         S.ep = '';
@@ -1271,7 +1277,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
             if (kf != null) S.lastMove[diff.mover] = { from: kf, to: k, piece: 'k' };
           }
         }
-        S.boardTurn = turn; S.boardTurnSrc = src; 
+        S.boardTurn = turn; S.boardTurnSrc = src;
         S.arb.since = 0; S.needRun = true;
       }
       S.prevBd = snap.bd;
@@ -1286,9 +1292,9 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           .filter((e) => parseClockText((e.textContent || '').replace(/\s+/g, '')) != null);
         els = els.filter((e) => !els.some((o) => o !== e && o.contains(e)));
       }
-      els = els.filter((e) => e.getClientRects().length > 0); 
+      els = els.filter((e) => e.getClientRects().length > 0);
       let midY = null;
-      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) { /* ignore */ }
+      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) {}
       return els.slice(0, 6).map((e) => {
         const cls = e.getAttribute('class') || '';
         let pos = /\bclock-bottom\b/.test(cls) ? 'bottom' : /\bclock-top\b/.test(cls) ? 'top' : null;
@@ -1483,18 +1489,19 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.observer = null; S.resizeObs = null; S.board = null;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
-      dbg('script istirahat');
+      dbg('halaman tidak didukung, script istirahat');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
-      dbg('script lanjut');
+      dbg('halaman didukung, script lanjut');
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
+      if (!onActivePage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
@@ -1511,8 +1518,8 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.dead = true;
       clearInterval(S.tickTimer); clearInterval(S.clockTimer); clearTimeout(S.snapTimer); clearTimeout(S.eloTimer);
       S.reqId++;
-      try { bridge.abort(); } catch (e) { /* ignore */ }
-      try { wasm.terminate(); } catch (e) { /* ignore */ }
+      try { bridge.abort(); } catch (e) {}
+      try { wasm.terminate(); } catch (e) {}
       if (S.observer) S.observer.disconnect();
       if (S.resizeObs) S.resizeObs.disconnect();
       if (ui) ui.destroy();
