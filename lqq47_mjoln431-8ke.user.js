@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.1.1
+// @version      1.1.2
 // @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -537,6 +537,7 @@
 
     const tiers = { 1: bestC, 2: null, 3: null };
     const pickTier = pick === bestC ? 1 : tierOf(pick);
+    if (pick !== bestC && pickTier === 1) tiers[1] = pick;
     if (pickTier === 2 || pickTier === 3) tiers[pickTier] = pick;
     for (const c of cs) {
       const t = tierOf(c);
@@ -552,7 +553,7 @@
         tiers[3] = pool[0];
       }
     }
-    const extra = pick !== bestC && pickTier === 1 ? pick : null;
+    const extra = null;
     return { cs, best, bestC, pick, base, tiers, extra, tags, styleUsed, note, pickTier, evalScore: bestC.score, evalMate: bestC.mate };
   }
 
@@ -1450,7 +1451,6 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         const c = d.tiers[t];
         if (c && S.settings.tiers['t' + t]) arrows.push({ move: c.move, tier: t, emph: c === d.pick });
       }
-      if (d.extra && S.settings.tiers.t1) arrows.push({ move: d.extra.move, tier: 1, emph: true });
       if (d.pickTier === 0 && S.settings.tiers.t3) arrows.push({ move: d.pick.move, tier: 0, emph: true });
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
       const styleName = { bot: 'Bot', human: 'Manusia', troll: 'Troll' }[d.styleUsed];
