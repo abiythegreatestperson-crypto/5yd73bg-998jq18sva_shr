@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.7.1
-// @description  Saran langkah + panah (Stockfish 19) untuk semua halaman di chess.com tanpa komentar
+// @version      1.0.0
+// @description  Saran langkah + panah (Stockfish 19) di chess.com
 // @match        https://www.chess.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -17,19 +17,9 @@
 // @connect      cdn.jsdelivr.net
 // ==/UserScript==
 
-/*
- * Catur Bantu: pembantu main catur di Chess.com (Tanpa Komentar & Semua Halaman).
- *
- * - Aktif di semua halaman chess.com (SPA, otomatis menyesuaikan).
- * - Engine utama: Stockfish native di Termux lewat bridge.py (http://127.0.0.1:8765).
- * - Cadangan: Stockfish.js 19.0.1 lite single-thread (WASM) dari GitHub release.
- */
 (function () {
   'use strict';
 
-  /* =====================================================================
-   * KONFIGURASI
-   * ===================================================================== */
   const CFG = {
     name: 'Catur Bantu',
     host: 'www.chess.com',
@@ -42,7 +32,7 @@
     wasmJs: 'stockfish-19-lite-single.js',
     wasmBin: 'stockfish-19-lite-single.wasm',
     presets: {
-      peluru: { movetime: 100, probeTime: 50, multipv: 3, multipvWasm: 3, specCands: 3, specMax: 4, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
+      peluru: { movetime: 100, probeTime: 50, multipv: 4, multipvWasm: 4, specCands: 3, specMax: 4, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
       kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, specCands: 4, specMax: 6, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
       cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, specCands: 5, specMax: 8, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
     },
@@ -58,6 +48,7 @@
     specWindow: 100,
     specWasmCands: 2,
     oppElo: null,
+    arrow: { w: 0.22, head: 0.6, outline: 0.05 },
   };
 
   try {
@@ -66,7 +57,7 @@
       if (t && typeof t === 'object') Object.assign(CFG, t);
       if (t && typeof t === 'object' && typeof t.pathRe === 'string') CFG.pathRe = new RegExp(t.pathRe);
     }
-  } catch (e) { /* abaikan */ }
+  } catch (e) { }
 
   const DEFAULTS = {
     v: 1,
@@ -78,9 +69,6 @@
     pos: null,
   };
 
-  /* =====================================================================
-   * UTIL
-   * ===================================================================== */
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const logBuf = [];
@@ -97,7 +85,7 @@
           const v = GM_getValue(k);
           return v === undefined ? d : v;
         }
-      } catch (e) { /* lanjut ke localStorage */ }
+      } catch (e) { }
       try {
         const v = localStorage.getItem('cch:' + k);
         return v === null ? d : JSON.parse(v);
@@ -106,8 +94,8 @@
     set(k, v) {
       try {
         if (typeof GM_setValue === 'function') { GM_setValue(k, v); return; }
-      } catch (e) { /* lanjut */ }
-      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) { /* abaikan */ }
+      } catch (e) { }
+      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) { }
     },
   };
 
@@ -149,13 +137,10 @@
         });
       } catch (e) { fail(String(e && e.message || e)); }
     });
-    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) { /* abaikan */ } };
+    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) { } };
     return p;
   }
 
-  /* =====================================================================
-   * CORE CATUR (murni, tanpa DOM)
-   * ===================================================================== */
   const FILES = 'abcdefgh';
   const sqName = (i) => FILES[i & 7] + ((i >> 3) + 1);
   const sqIdx = (s) => (s.charCodeAt(0) - 97) + (s.charCodeAt(1) - 49) * 8;
@@ -343,6 +328,16 @@
     const cap = bd[sqIdx(to)] || (t === 'p' && from[0] !== to[0]);
     const letter = t === 'p' ? '' : t.toUpperCase();
     return letter + from + (cap ? 'x' : '→') + to + (uci[4] ? '=' + uci[4].toUpperCase() : '');
+  }
+
+  function arrowLane(uci) {
+    const i1 = sqIdx(uci.slice(0, 2)), i2 = sqIdx(uci.slice(2, 4));
+    const df = (i2 & 7) - (i1 & 7), dr = (i2 >> 3) - (i1 >> 3);
+    const adf = Math.abs(df), adr = Math.abs(dr);
+    const knight = (adf === 1 && adr === 2) || (adf === 2 && adr === 1);
+    const dx = knight ? (adf === 2 ? Math.sign(df) : 0) : Math.sign(df);
+    const dy = knight ? (adf === 2 ? 0 : Math.sign(dr)) : Math.sign(dr);
+    return uci.slice(0, 2) + ':' + dx + ',' + dy;
   }
 
   function diffInfo(prev, bd) {
@@ -602,28 +597,31 @@
     }
     const risk = (c) => (c.score <= -90000 && best > -90000 ? 2 : 0) + (best >= 200 && c.score < 100 ? 1 : 0);
     const taken = () => new Set([bestC, pick, tiers[1], tiers[2], tiers[3]].filter(Boolean));
-    if (!tiers[3]) {
-      const used = taken();
+    const laneSet = () => new Set([tiers[1], tiers[2], tiers[3]].filter(Boolean).map((c) => arrowLane(c.move)));
+    const choose = (want) => {
+      const used = taken(), ln = laneSet();
       const rest = cs.filter((c) => !used.has(c));
-      const safeRest = rest.filter(safe);
-      if (safeRest.length) {
-        tiers[3] = safeRest.reduce((x, y) => (y.loss > x.loss ? y : x));
-      } else if (rest.length) {
-        const bad = rest.filter((c) => c.loss > T.t2);
-        tiers[3] = (bad.length ? bad.sort((x, y) => risk(x) - risk(y) || x.loss - y.loss) : rest.sort((x, y) => y.loss - x.loss))[0];
-      }
-    }
-    if (!tiers[2]) {
-      const used = taken();
-      const pool = cs.filter((c) => !used.has(c) && safe(c));
-      if (pool.length) {
-        const target = tiers[3] ? tiers[3].loss / 2 : T.t1;
-        tiers[2] = pool.reduce((x, y) => {
-          const dx = Math.abs(x.loss - target), dy = Math.abs(y.loss - target);
+      const pools = [
+        rest.filter((c) => safe(c) && !ln.has(arrowLane(c.move))),
+        rest.filter(safe),
+        rest.slice().sort((x, y) => risk(x) - risk(y) || x.loss - y.loss),
+      ];
+      for (let k = 0; k < 3; k++) {
+        const pool = pools[k];
+        if (!pool.length) continue;
+        if (k === 2) return pool[0];
+        if (want === 'weakest') return pool.reduce((x, y) => (y.loss > x.loss ? y : x));
+        return pool.reduce((x, y) => {
+          const dx = Math.abs(x.loss - want), dy = Math.abs(y.loss - want);
           return dy < dx || (dy === dx && y.loss < x.loss) ? y : x;
         });
       }
-    }
+      return null;
+    };
+    if (!tiers[3]) tiers[3] = choose('weakest');
+    if (!tiers[2]) tiers[2] = choose(tiers[3] ? tiers[3].loss / 2 : T.t1);
+    if (tiers[2] && tiers[3] && tiers[2] !== pick && tiers[3] !== pick && tiers[2].loss > tiers[3].loss) { const t = tiers[2]; tiers[2] = tiers[3]; tiers[3] = t; }
+    for (const t of [2, 3]) if (!tiers[t] && ![tiers[1], tiers[2], tiers[3]].includes(bestC)) tiers[t] = bestC;
     return { cs, best, bestC, pick, base, tiers, tags, styleUsed, note, pickTier, trollWin, evalScore: bestC.score, evalMate: bestC.mate };
   }
 
@@ -723,7 +721,7 @@
             const hit = await c.match(url);
             if (hit) return { data: type === 'text' ? await hit.text() : await hit.arrayBuffer(), url };
           }
-        } catch (e) { /* cache nggak ada, lanjut */ }
+        } catch (e) { }
         try {
           const r = await gmRequest({ url, responseType: type === 'text' ? 'text' : 'arraybuffer', timeout: 60000 });
           if (r.status !== 200) throw new Error('HTTP ' + r.status);
@@ -734,7 +732,7 @@
               const c = await caches.open('catur-bantu-v1');
               await c.put(url, new Response(data));
             }
-          } catch (e) { /* abaikan */ }
+          } catch (e) { }
           return { data, url };
         } catch (e) { errs.push(url + ' -> ' + e.message); }
       }
@@ -750,7 +748,7 @@
 
     _fail(kind, msg) {
       this.state = 'failed'; this.failure = kind;
-      try { if (this.worker) this.worker.terminate(); } catch (e) { /* abaikan */ }
+      try { if (this.worker) this.worker.terminate(); } catch (e) { }
       this.worker = null; this.applied = {}; this.searching = false;
       const s = this.sink; this.sink = null;
       const er = new Error(msg); er.kind = 'wasm'; er.wasmFailure = kind;
@@ -871,20 +869,17 @@
         return out;
       };
       const p = this.chain.then(run, run);
-      this.chain = p.catch(() => { /* rantai tetap jalan */ });
+      this.chain = p.catch(() => { });
       return p;
     }
 
     terminate() {
       this.gen++;
-      try { if (this.worker) this.worker.terminate(); } catch (e) { /* abaikan */ }
+      try { if (this.worker) this.worker.terminate(); } catch (e) { }
       this.worker = null; this.state = 'idle'; this.applied = {}; this.sink = null; this.searching = false;
     }
   }
 
-  /* =====================================================================
-   * UI (Shadow DOM, gaya krem + terakota)
-   * ===================================================================== */
   const NS_SVG = 'http://www.w3.org/2000/svg';
   const TIER_COLOR = { 0: '#7d7a72', 1: '#3f9d66', 2: '#e0a526', 3: '#d4543f' };
 
@@ -911,10 +906,10 @@
   display:grid;place-items:center;cursor:pointer;padding:0}
 .ibtn:active{background:var(--border)}
 .body{padding:2px 16px 14px;display:flex;flex-direction:column;gap:11px}
-.card{background:var(--surface);border-radius:16px;padding:10px 14px;min-height:50px}
+.card{background:var(--surface);border-radius:16px;padding:10px 14px;min-height:72px}
 .lbl{font-size:12px;color:var(--muted);letter-spacing:.02em}
 .move{font:600 26px/1.2 ui-serif,Georgia,serif;margin-top:2px;word-break:break-word}
-.sub{display:none}
+.sub{font-size:13px;color:var(--muted);margin-top:2px;white-space:pre-line}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .val{font-weight:600}
 input[type=range]{width:100%;height:30px;accent-color:var(--accent);margin:0}
@@ -957,7 +952,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           '<button class="ibtn" data-act="min" title="Kecilkan">−</button>' +
           '<button class="ibtn" data-act="close" title="Tutup sampai reload">×</button></div>' +
         '<div class="body">' +
-          '<div class="card"><div class="lbl">Saran</div><div class="move" data-r="move">—</div></div>' +
+          '<div class="card"><div class="lbl">Saran</div><div class="move" data-r="move">—</div><div class="sub" data-r="sub">Nunggu papan…</div></div>' +
           '<div><div class="row"><span class="lbl">Elo mesin</span><span class="val" data-r="elo">3000+</span></div>' +
             '<input type="range" min="100" max="3000" step="50" data-r="slider">' +
             '<div class="note" data-r="elonote"></div></div>' +
@@ -982,7 +977,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     const $ = (sel) => root.querySelector(sel);
     const el = {
       arrows: $('.arrows'), fab: $('.fab'), panel: $('.panel'), hd: $('.hd'),
-      move: $('[data-r=move]'), elo: $('[data-r=elo]'), slider: $('[data-r=slider]'),
+      move: $('[data-r=move]'), sub: $('[data-r=sub]'), elo: $('[data-r=elo]'), slider: $('[data-r=slider]'),
       elonote: $('[data-r=elonote]'), stylenote: $('[data-r=stylenote]'), speednote: $('[data-r=speednote]'), led: $('[data-r=led]'),
       status: $('[data-r=status]'), debug: $('[data-r=debug]'),
       premovebtn: $('[data-premove]'), premovenote: $('[data-r=premovenote]'),
@@ -1024,7 +1019,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         if (e.target.closest && e.target.closest('button')) return;
         id = e.pointerId; moved = false; sx = e.clientX; sy = e.clientY;
         const p = getXY(); ox = p[0]; oy = p[1];
-        try { handle.setPointerCapture(id); } catch (er) { /* abaikan */ }
+        try { handle.setPointerCapture(id); } catch (er) { }
       });
       handle.addEventListener('pointermove', (e) => {
         if (id !== e.pointerId) return;
@@ -1034,7 +1029,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       });
       const end = (e) => {
         if (id !== e.pointerId) return;
-        try { handle.releasePointerCapture(id); } catch (er) { /* abaikan */ }
+        try { handle.releasePointerCapture(id); } catch (er) { }
         id = null;
         if (moved) savePos(); else if (onTap) onTap();
       };
@@ -1058,7 +1053,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const done = () => dbg('disalin ' + t.length + ' karakter');
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done, () => fallback()); return; }
-      } catch (e) { /* lanjut */ }
+      } catch (e) { }
       fallback();
       function fallback() {
         try {
@@ -1147,13 +1142,11 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       el.status.textContent = text;
       renderDebug();
     }
-    
-    // HANYA MENAMPILKAN LANGKAH SAJA (TANPA KOMENTAR/SUB-TEKS)
-    function setSuggestion(main) {
+    function setSuggestion(main, sub) {
       el.move.textContent = main || '—';
+      el.sub.textContent = sub || '';
     }
 
-    // ---- panah ----
     let lastArrows = null;
     function drawArrows(arrows, bd, flipped, board) {
       lastArrows = arrows ? { arrows, flipped, board } : null;
@@ -1178,26 +1171,34 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       };
       const Z = { 0: 0, 3: 1, 2: 2, 1: 3 };
       const list = lastArrows.arrows.slice().sort((a, b) => Z[a.tier] - Z[b.tier]);
+      const AR = CFG.arrow;
+      const w = sq * AR.w, head = sq * AR.head, ol = sq * AR.outline;
       for (const a of list) {
-        const p1 = ctr(sqIdx(a.move.slice(0, 2))), p2 = ctr(sqIdx(a.move.slice(2, 4)));
-        let dx = p2[0] - p1[0], dy = p2[1] - p1[1];
-        const len = Math.hypot(dx, dy) || 1;
-        dx /= len; dy /= len;
-        const w = sq * 0.14, head = sq * 0.42;
-        const sx = p1[0] + dx * sq * 0.18, sy = p1[1] + dy * sq * 0.18;
-        const bx = p2[0] - dx * head * 0.9, by = p2[1] - dy * head * 0.9;
-        const tx = p2[0] - dx * sq * 0.06, ty = p2[1] - dy * sq * 0.06;
-        const nx = -dy, ny = dx, hw = head * 0.5;
+        const i1 = sqIdx(a.move.slice(0, 2)), i2 = sqIdx(a.move.slice(2, 4));
+        const df = (i2 & 7) - (i1 & 7), dr = (i2 >> 3) - (i1 >> 3);
+        const knight = (Math.abs(df) === 1 && Math.abs(dr) === 2) || (Math.abs(df) === 2 && Math.abs(dr) === 1);
+        const p1 = ctr(i1), p2 = ctr(i2);
+        const mid = knight ? ctr(Math.abs(df) === 2 ? (i2 & 7) + (i1 >> 3) * 8 : (i1 & 7) + (i2 >> 3) * 8) : null;
+        const unit = (u, v) => { const dx = v[0] - u[0], dy = v[1] - u[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
+        const d0 = unit(p1, mid || p2), d1 = unit(mid || p1, p2);
+        const sx = p1[0] + d0[0] * sq * 0.18, sy = p1[1] + d0[1] * sq * 0.18;
+        const bx = p2[0] - d1[0] * head * 0.9, by = p2[1] - d1[1] * head * 0.9;
+        const tx = p2[0] - d1[0] * sq * 0.06, ty = p2[1] - d1[1] * sq * 0.06;
+        const nx = -d1[1], ny = d1[0], hw = head * 0.5;
+        const dPath = 'M' + sx + ' ' + sy + (mid ? ' L' + mid[0] + ' ' + mid[1] : '') + ' L' + bx + ' ' + by;
+        const pts = [tx, ty, bx + nx * hw, by + ny * hw, bx - nx * hw, by - ny * hw].join(',');
         const g = document.createElementNS(NS_SVG, 'g');
-        g.setAttribute('opacity', '0.86');
-        const ln = document.createElementNS(NS_SVG, 'line');
-        ln.setAttribute('x1', sx); ln.setAttribute('y1', sy); ln.setAttribute('x2', bx); ln.setAttribute('y2', by);
-        ln.setAttribute('stroke', TIER_COLOR[a.tier]); ln.setAttribute('stroke-width', w); ln.setAttribute('stroke-linecap', 'round');
-        g.appendChild(ln);
-        const pg = document.createElementNS(NS_SVG, 'polygon');
-        pg.setAttribute('points', [tx, ty, bx + nx * hw, by + ny * hw, bx - nx * hw, by - ny * hw].join(','));
-        pg.setAttribute('fill', TIER_COLOR[a.tier]);
-        g.appendChild(pg);
+        g.setAttribute('opacity', '0.92');
+        for (const layer of [{ c: '#ffffff', extra: ol * 2 }, { c: TIER_COLOR[a.tier], extra: 0 }]) {
+          const pa = document.createElementNS(NS_SVG, 'path');
+          pa.setAttribute('d', dPath); pa.setAttribute('fill', 'none'); pa.setAttribute('stroke', layer.c);
+          pa.setAttribute('stroke-width', w + layer.extra); pa.setAttribute('stroke-linecap', 'round'); pa.setAttribute('stroke-linejoin', 'round');
+          g.appendChild(pa);
+          const pg = document.createElementNS(NS_SVG, 'polygon');
+          pg.setAttribute('points', pts); pg.setAttribute('fill', layer.c);
+          if (layer.extra) { pg.setAttribute('stroke', layer.c); pg.setAttribute('stroke-width', layer.extra); pg.setAttribute('stroke-linejoin', 'round'); }
+          g.appendChild(pg);
+        }
         svg.appendChild(g);
       }
     }
@@ -1219,21 +1220,18 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       host, setStatus, setSuggestion, drawArrows, relayout, renderSettings, renderDebug,
       setVisible(v) { host.style.display = v ? '' : 'none'; },
       destroy() {
-        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) { /* abaikan */ }
+        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) { }
         host.remove();
       },
     };
   }
 
-  /* =====================================================================
-   * KONTROLER
-   * ===================================================================== */
-  function onChessPage() {
-    return location.hostname === CFG.host && CFG.pathRe.test(location.pathname);
+  function onActivePage() {
+    return location.hostname === CFG.host;
   }
 
   function init() {
-    if (!onChessPage()) return;
+    if (!onActivePage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1423,7 +1421,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       }
       els = els.filter((e) => e.getClientRects().length > 0);
       let midY = null;
-      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) { /* abaikan */ }
+      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) { }
       return els.slice(0, 6).map((e) => {
         const cls = e.getAttribute('class') || '';
         let pos = /\bclock-bottom\b/.test(cls) ? 'bottom' : /\bclock-top\b/.test(cls) ? 'top' : null;
@@ -1451,6 +1449,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (d.pending) {
         if (!S.pendingShown) {
           S.pendingShown = true;
+          if (ui) ui.setSuggestion('—', 'Nyocokin jam dan papan…');
           status('warn', 'Jam dan papan belum sepakat, nunggu bentar…');
         }
         return;
@@ -1507,6 +1506,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (turnMe && S.specAdopt) {
         const ad = S.specAdopt; S.specAdopt = null; S.preMiss = false;
         const id0 = S.reqId;
+        ui.setSuggestion('—', 'Tebakan lawan benar, hitungan lagi diselesein…');
         status('warn', 'Tebakan benar, nunggu hitungan yang lagi jalan…');
         let last = null;
         try { last = await ad.promise; } catch (e) { last = null; }
@@ -1516,13 +1516,14 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       cancelAnalysis();
       const id = S.reqId;
       if (!S.turn) {
+        ui.setSuggestion('—', '');
         status('warn', 'Giliran belum ketahuan, tunggu langkah berikutnya.');
         return;
       }
       if (S.turn !== S.me) {
         S.specHit = null; S.specAdopt = null; S.preMiss = false; S.spec = null;
-        if (S.settings.premove) { status('warn', 'Nebak langkah lawan…'); }
-        else { status('ok', 'Giliran lawan.'); }
+        if (S.settings.premove) { ui.setSuggestion('—', 'Giliran lawan, nebak langkahnya…'); status('warn', 'Nebak langkah lawan…'); }
+        else { ui.setSuggestion('—', 'Giliran lawan'); status('ok', 'Giliran lawan.'); }
         if (CFG.speculate) await speculate(id);
         return;
       }
@@ -1533,11 +1534,13 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.dbg.fen = fen;
       if (err) {
         S.dbg.err = err;
+        ui.setSuggestion('—', '');
         status('err', 'Posisi nggak valid: ' + err + '. Nggak dikirim ke engine.');
         return;
       }
       S.dbg.err = '';
       if (miss) {
+        ui.setSuggestion('—', 'Tebakan lawan meleset, hitung ulang…');
         status('warn', 'Tebakan meleset, panah baru sebentar lagi…');
         await sleep(CFG.premoveMissDelayMs);
         if (id !== S.reqId) return;
@@ -1546,6 +1549,15 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     }
 
     function preset() { return CFG.presets[S.settings.speed] || CFG.presets[CFG.defaultSpeed]; }
+
+    const resCache = new Map();
+    const resKey = (fen) => fen + '|' + S.settings.speed + '|' + S.settings.elo;
+    function remember(fen, res, via, ms) {
+      if (!res || !res.lines || !res.lines.length) return;
+      const k = resKey(fen);
+      resCache.delete(k); resCache.set(k, { res, via, ms });
+      if (resCache.size > 60) resCache.delete(resCache.keys().next().value);
+    }
 
     function buildRequest(fen, usingWasm, plan) {
       const p = preset();
@@ -1595,6 +1607,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const msg = String(e && e.message || e);
       S.dbg.err = msg;
       dbg('analisis gagal: ' + msg);
+      ui.setSuggestion('—', '');
       if (e.kind === 'wasm') {
         status('err', e.wasmFailure === 'blocked' ? 'Worker diblokir (' + msg + ')' :
           e.wasmFailure === 'download' ? 'WASM gagal diunduh (' + msg + ')' : 'Engine WASM error (' + msg + ')');
@@ -1602,6 +1615,13 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     }
 
     async function analyze(id, fen) {
+      const cached = resCache.get(resKey(fen));
+      if (cached && id === S.reqId) {
+        S.last = { res: cached.res, fen, via: cached.via, ms: cached.ms, bd: S.bd, flipped: S.flipped, board: S.board };
+        S.dbg.last = cached.via + ' | cache | depth ' + cached.res.depth + ' | ' + cached.res.lines.length + ' kandidat';
+        render();
+        return;
+      }
       if (!S.bridgeChecked) { status('warn', 'Mengecek jembatan…'); await pingBridge(); if (id !== S.reqId) return; }
       const t0 = performance.now();
       status('warn', 'Menghitung…');
@@ -1610,11 +1630,13 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (!out) return;
       const res = out.res, via = out.via;
       if (!res.lines || !res.lines.length) {
+        ui.setSuggestion('—', 'Nggak ada langkah');
         status('warn', 'Engine nggak nemu langkah (game selesai?).');
         return;
       }
       S.last = { res, fen, via, ms: Math.round(performance.now() - t0), bd: S.bd, flipped: S.flipped, board: S.board };
       S.dbg.last = via + ' | ' + S.last.ms + ' ms | depth ' + res.depth + ' | ' + res.lines.length + ' kandidat';
+      remember(fen, res, via, S.last.ms);
       render();
     }
 
@@ -1626,7 +1648,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const err = validateBoard(bd, oppTurn);
       if (err) {
         dbg('tebakan dilewati: ' + err);
-        if (S.settings.premove) { S.dbg.err = err; status('err', 'Posisi nggak valid: ' + err + '. Nggak dikirim ke engine.'); }
+        if (S.settings.premove) { S.dbg.err = err; ui.setSuggestion('—', ''); status('err', 'Posisi nggak valid: ' + err + '. Nggak dikirim ke engine.'); }
         return;
       }
       S.dbg.err = '';
@@ -1660,7 +1682,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       lines.forEach((l, i) => { if (top - sc[i] <= win && moves.indexOf(l.move) < 0) moves.push(l.move); });
       const cands = moves.slice(0, K);
       if (!cands.length) {
-        if (vis()) { status('warn', 'Nggak bisa nebak langkah lawan (game selesai?).'); }
+        if (vis()) { ui.setSuggestion('—', 'Giliran lawan'); status('warn', 'Nggak bisa nebak langkah lawan (game selesai?).'); }
         return;
       }
       S.dbg.pre = cands.map((m) => describeMove(bd, m)).join(' | ') + ' (' + o1.via + ')';
@@ -1688,6 +1710,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         const p = (async () => {
           const o2 = await runEngine(id, fenMe);
           if (!o2 || !o2.res.lines || !o2.res.lines.length) return null;
+          remember(fenMe, o2.res, o2.via, Math.round(performance.now() - t1));
           return {
             res: o2.res, fen: fenMe, via: o2.via, ms: Math.round(performance.now() - t1), bd: ap.bd, flipped: S.flipped, board: S.board,
             pre: true, predText, rights: rights2, oppLast: { from: ap.from, to: ap.to, piece: ap.piece.toLowerCase() },
@@ -1731,16 +1754,29 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.dbg.cands = d.cs.map((c) => c.move + ' ' + fmtEval(c.score, c.mate)
         + (c === d.tiers[1] ? ' [H]' : c === d.tiers[2] ? ' [K]' : c === d.tiers[3] ? ' [M]' : '') + (c === d.pick ? ' *' : '')).join(' | ');
       ui.renderDebug();
-      const arrows = [];
+      const arrows = [], seen = new Set();
+      const add = (move, tier, emph) => {
+        if (seen.has(move)) { dbg('panah dobel dibuang: ' + move + ' (tingkat ' + tier + ')'); return; }
+        seen.add(move); arrows.push({ move, tier, emph });
+      };
       for (const t of [1, 2, 3]) {
         const c = d.tiers[t];
-        if (c && S.settings.tiers['t' + t]) arrows.push({ move: c.move, tier: t, emph: c === d.pick });
+        if (c && S.settings.tiers['t' + t]) add(c.move, t, c === d.pick);
       }
-      if (d.pickTier === 0 && S.settings.tiers.t3) arrows.push({ move: d.pick.move, tier: 0, emph: true });
+      if (d.pickTier === 0 && S.settings.tiers.t3) add(d.pick.move, 0, true);
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
-      
-      // HANYA MENAMPILKAN LANGKAH SAJA (TANPA KOMENTAR / SUB-TEKS)
-      ui.setSuggestion(describeMove(L.bd, d.pick.move));
+      const styleName = { bot: 'Bot', human: 'Manusia', troll: 'Troll' }[d.styleUsed];
+      const tierName = {
+        1: d.pick === d.bestC ? 'terbaik' : (d.trollWin ? 'masih menang' : 'hampir terbaik'),
+        2: 'biasa', 3: 'jelek tapi aman', 0: 'di luar batas aman (tiruan Elo rendah)',
+      }[d.pickTier] || '';
+      const ev = fmtEval(d.evalScore, d.evalMate);
+      const sub = ['Eval ' + ev + (d.evalScore >= 150 ? ' (kamu unggul)' : d.evalScore <= -150 ? ' (kamu ketinggalan)' : ' (seimbang)'),
+        styleName + (tierName ? ' · ' + tierName : '') + (d.tags.length ? ' · ' + d.tags.join(', ') : '')].join('\n');
+      const bestLine = d.styleUsed !== 'bot' && d.pick !== d.bestC
+        ? '\nTerbaik engine: ' + describeMove(L.bd, d.bestC.move) + ' (' + fmtEval(d.bestC.score, d.bestC.mate) + ')' : '';
+      const preLine = L.pre ? 'Premove: kalau lawan main ' + L.predText + '\n' : '';
+      ui.setSuggestion(describeMove(L.bd, d.pick.move), preLine + sub + bestLine + (d.note ? '\n' + d.note : ''));
       status('ok', L.pre ? 'Premove (tebakan ' + L.predText + ') · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth
         : L.hit ? 'Tebakan lawan benar, udah dihitung duluan · ' + L.via + ' · depth ' + L.res.depth
         : 'Siap · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth);
@@ -1775,17 +1811,19 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
+      dbg('halaman tidak didukung, script istirahat');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
+      dbg('di halaman chess.com, script lanjut');
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!onChessPage()) { suspend(); return; }
+      if (!onActivePage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
@@ -1802,8 +1840,8 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.dead = true;
       clearInterval(S.tickTimer); clearInterval(S.clockTimer); clearTimeout(S.snapTimer); clearTimeout(S.eloTimer);
       S.reqId++;
-      try { bridge.abort(); } catch (e) { /* abaikan */ }
-      try { wasm.terminate(); } catch (e) { /* abaikan */ }
+      try { bridge.abort(); } catch (e) { }
+      try { wasm.terminate(); } catch (e) { }
       if (S.observer) S.observer.disconnect();
       if (S.resizeObs) S.resizeObs.disconnect();
       if (ui) ui.destroy();
@@ -1835,10 +1873,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         if (S.settings.premove) {
           if (S.spec && S.spec.first) { S.last = S.spec.first; render(); }
           else if (!S.spec) { cancelAnalysis(); speculate(S.reqId); }
-          else { status('warn', 'Nebak langkah lawan…'); }
+          else { ui.setSuggestion('—', 'Giliran lawan, nebak langkahnya…'); status('warn', 'Nebak langkah lawan…'); }
         } else if (S.last && S.last.pre) {
           clearArrowsNow(); S.last = null;
-          status('ok', 'Giliran lawan.');
+          ui.setSuggestion('—', 'Giliran lawan'); status('ok', 'Giliran lawan.');
         }
       },
     });
@@ -1856,7 +1894,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     globalThis.__CCH_TEST_CORE__({
       fenPlacement, buildFEN, validateBoard, applyMove, attackersOf, isAttacked, attackedPieces, guessRights, intersectRights,
       diffInfo, highlightMover, decide, eloPlan, scoreOf, fmtEval, describeMove, parseInfo, LineCollector, sqName, sqIdx,
-      undevMinors, pieceCount, CFG, START_PLACEMENT, parseClockText, clockTurn, arbitrateTurn,
+      undevMinors, pieceCount, CFG, START_PLACEMENT, parseClockText, clockTurn, arbitrateTurn, arrowLane,
     });
   }
   if (!globalThis.__CCH_NOSTART__) init();
