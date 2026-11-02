@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.1.2
+// @version      1.2.0
 // @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -30,10 +30,12 @@
     ],
     wasmJs: 'stockfish-19-lite-single.js',
     wasmBin: 'stockfish-19-lite-single.wasm',
-    movetime: 300,
-    probeTime: 120,
-    multipvBridge: 8,
-    multipvWasm: 6,
+    presets: {
+      peluru: { movetime: 100, probeTime: 50, multipv: 3, multipvWasm: 3, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
+      kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
+      cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
+    },
+    defaultSpeed: 'kilat',
     tier: { t1: 30, t2: 100, t3: 150 },
     bridgePingMs: 8000,
     bridgeAlivePingMs: 30000,
@@ -53,6 +55,7 @@
     v: 1,
     elo: 3000,
     style: 'bot',
+    speed: 'kilat',
     tiers: { t1: true, t2: true, t3: true },
     pos: null,
   };
@@ -537,24 +540,35 @@
 
     const tiers = { 1: bestC, 2: null, 3: null };
     const pickTier = pick === bestC ? 1 : tierOf(pick);
-    if (pick !== bestC && pickTier === 1) tiers[1] = pick;
-    if (pickTier === 2 || pickTier === 3) tiers[pickTier] = pick;
-    for (const c of cs) {
-      const t = tierOf(c);
-      if ((t === 2 || t === 3) && !tiers[t]) tiers[t] = c;
+    if (pick !== bestC) {
+      if (pickTier === 1 || pickTier === 2) tiers[2] = pick;
+      else if (pickTier === 3) tiers[3] = pick;
     }
+    const risk = (c) => (c.score <= -90000 && best > -90000 ? 2 : 0) + (best >= 200 && c.score < 100 ? 1 : 0);
+    const taken = () => new Set([bestC, pick, tiers[2], tiers[3]].filter(Boolean));
     if (!tiers[3]) {
-      const used = new Set([bestC, pick, tiers[2]].filter(Boolean));
+      const used = taken();
       const rest = cs.filter((c) => !used.has(c));
-      if (rest.length) {
-        const risk = (c) => (c.score <= -90000 && best > -90000 ? 2 : 0) + (best >= 200 && c.score < 100 ? 1 : 0);
+      const safeRest = rest.filter(safe);
+      if (safeRest.length) {
+        tiers[3] = safeRest.reduce((x, y) => (y.loss > x.loss ? y : x));
+      } else if (rest.length) {
         const bad = rest.filter((c) => c.loss > T.t2);
-        const pool = bad.length ? bad.sort((a, b) => risk(a) - risk(b) || a.loss - b.loss) : rest.sort((a, b) => b.loss - a.loss);
-        tiers[3] = pool[0];
+        tiers[3] = (bad.length ? bad.sort((x, y) => risk(x) - risk(y) || x.loss - y.loss) : rest.sort((x, y) => y.loss - x.loss))[0];
       }
     }
-    const extra = null;
-    return { cs, best, bestC, pick, base, tiers, extra, tags, styleUsed, note, pickTier, evalScore: bestC.score, evalMate: bestC.mate };
+    if (!tiers[2]) {
+      const used = taken();
+      const pool = cs.filter((c) => !used.has(c) && safe(c));
+      if (pool.length) {
+        const target = tiers[3] ? tiers[3].loss / 2 : T.t1;
+        tiers[2] = pool.reduce((x, y) => {
+          const dx = Math.abs(x.loss - target), dy = Math.abs(y.loss - target);
+          return dy < dx || (dy === dx && y.loss < x.loss) ? y : x;
+        });
+      }
+    }
+    return { cs, best, bestC, pick, base, tiers, tags, styleUsed, note, pickTier, evalScore: bestC.score, evalMate: bestC.mate };
   }
 
   function parseInfo(line) {
@@ -882,13 +896,16 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           '<div><div class="row"><span class="lbl">Elo mesin</span><span class="val" data-r="elo">3000+</span></div>' +
             '<input type="range" min="100" max="3000" step="50" data-r="slider">' +
             '<div class="note" data-r="elonote"></div></div>' +
+          '<div><div class="lbl" style="margin-bottom:6px">Kecepatan game</div>' +
+            '<div class="seg"><button data-speed="peluru">Peluru</button><button data-speed="kilat">Kilat</button><button data-speed="cepat">Cepat</button></div>' +
+            '<div class="note" data-r="speednote" style="margin-top:6px"></div></div>' +
           '<div><div class="lbl" style="margin-bottom:6px">Gaya saran</div>' +
             '<div class="seg"><button data-style="bot">Bot</button><button data-style="human">Manusia</button><button data-style="troll">Troll</button></div>' +
             '<div class="note" data-r="stylenote" style="margin-top:6px"></div></div>' +
           '<div><div class="lbl" style="margin-bottom:6px">Panah</div><div class="chips">' +
             '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Terbaik</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t2"><span class="dot" style="background:' + TIER_COLOR[2] + '"></span>Biasa aja</label>' +
-            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Jelek</label>' +
+            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Meleset dikit</label>' +
           '</div></div>' +
           '<div class="status"><span class="led" data-r="led"></span><span data-r="status">Mulai…</span></div>' +
           '<details><summary>Debug</summary><pre data-r="debug"></pre>' +
@@ -899,7 +916,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     const el = {
       arrows: $('.arrows'), fab: $('.fab'), panel: $('.panel'), hd: $('.hd'),
       move: $('[data-r=move]'), sub: $('[data-r=sub]'), elo: $('[data-r=elo]'), slider: $('[data-r=slider]'),
-      elonote: $('[data-r=elonote]'), stylenote: $('[data-r=stylenote]'), led: $('[data-r=led]'),
+      elonote: $('[data-r=elonote]'), stylenote: $('[data-r=stylenote]'), speednote: $('[data-r=speednote]'), led: $('[data-r=led]'),
       status: $('[data-r=status]'), debug: $('[data-r=debug]'),
     };
     const FAB = 48;
@@ -996,6 +1013,9 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       root.querySelectorAll('[data-style]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-style') === S.settings.style));
       root.querySelectorAll('[data-tier]').forEach((c) => { c.checked = !!S.settings.tiers[c.getAttribute('data-tier')]; });
       el.stylenote.textContent = STYLE_NOTE[S.settings.style];
+      root.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-speed') === S.settings.speed));
+      const sp = CFG.presets[S.settings.speed] || CFG.presets[CFG.defaultSpeed];
+      el.speednote.textContent = sp.hint + ' (~' + String(sp.movetime / 1000).replace('.', ',') + ' detik, ' + sp.multipv + ' kandidat)';
       const lo = S.uciMin || 1320;
       el.elonote.textContent = S.settings.elo >= 3000
         ? 'Kekuatan penuh, tanpa batas.'
@@ -1015,6 +1035,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.settings.style = b.getAttribute('data-style');
       renderSettings(); handlers.save(); handlers.styleChanged();
     }));
+    root.querySelectorAll('[data-speed]').forEach((b) => b.addEventListener('click', () => {
+      S.settings.speed = b.getAttribute('data-speed');
+      renderSettings(); handlers.save(); handlers.speedChanged();
+    }));
     root.querySelectorAll('[data-tier]').forEach((c) => c.addEventListener('change', () => {
       S.settings.tiers[c.getAttribute('data-tier')] = c.checked;
       handlers.save(); handlers.redraw();
@@ -1029,6 +1053,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         'bidak   : ' + (d.pieces == null ? '-' : d.pieces) + ' | dibalik: ' + (d.flipped ? 'ya' : 'tidak'),
         'giliran : ' + (d.turn || '?') + ' (' + (d.turnSrc || '-') + ') | kamu: ' + (d.me || '-'),
         'jam     : ' + (d.clock || '-'),
+        'kandidat: ' + (d.cands || '-'),
         'FEN     : ' + (d.fen || '-'),
         'engine  : ' + (d.engine || '-'),
         'terakhir: ' + (d.last || '-'),
@@ -1140,6 +1165,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     };
     S.settings.tiers = Object.assign({}, DEFAULTS.tiers, S.settings.tiers || {});
     if (!['bot', 'human', 'troll'].includes(S.settings.style)) S.settings.style = 'bot';
+    if (!CFG.presets[S.settings.speed]) S.settings.speed = CFG.defaultSpeed;
     S.settings.elo = clamp(+S.settings.elo || 3000, 100, 3000);
 
     const bridge = new BridgeEngine(CFG.bridge);
@@ -1372,9 +1398,12 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       await analyze(id, fen);
     }
 
+    function preset() { return CFG.presets[S.settings.speed] || CFG.presets[CFG.defaultSpeed]; }
+
     function buildRequest(fen, usingWasm, plan) {
+      const p = preset();
       return {
-        fen, multipv: usingWasm ? CFG.multipvWasm : CFG.multipvBridge, movetime: CFG.movetime,
+        fen, multipv: usingWasm ? p.multipvWasm : p.multipv, movetime: p.movetime,
         options: {}, probe: plan.probe,
       };
     }
@@ -1387,7 +1416,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       try {
         if (S.bridgeOk) {
           try {
-            const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, CFG.probeTime);
+            const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
             res = await bridge.analyze(buildRequest(fen, false, plan));
             via = 'jembatan';
             res._plan = plan;
@@ -1403,7 +1432,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         if (!res) {
           if (wasm.state !== 'ready') status('warn', 'Jembatan tidak terhubung. Memuat WASM (±1,8 MB)…');
           S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
-          const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, CFG.probeTime);
+          const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
           res = await wasm.analyze(buildRequest(fen, true, plan), (st) => { if (st === 'loading') status('warn', 'Memuat WASM (±1,8 MB)…'); });
           S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
           if (ui) ui.renderSettings();
@@ -1437,7 +1466,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const L = S.last;
       if (!L || !ui) return;
       const white = S.me === 'w';
-      const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, CFG.probeTime);
+      const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
       const ctx = {
         bd: L.bd, white, rights: S.rights || '', lastMine: S.lastMove[S.me], plan, style: S.settings.style,
         opening: pieceCount(L.bd) >= 26 && undevMinors(L.bd, white) >= 2,
@@ -1446,6 +1475,9 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       };
       const d = decide(L.res, ctx);
       if (!d) return;
+      S.dbg.cands = d.cs.map((c) => c.move + ' ' + fmtEval(c.score, c.mate)
+        + (c === d.tiers[1] ? ' [H]' : c === d.tiers[2] ? ' [K]' : c === d.tiers[3] ? ' [M]' : '') + (c === d.pick ? ' *' : '')).join(' | ');
+      ui.renderDebug();
       const arrows = [];
       for (const t of [1, 2, 3]) {
         const c = d.tiers[t];
@@ -1531,6 +1563,9 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       close: shutdown,
       redraw: () => render(),
       styleChanged: () => render(),
+      speedChanged: () => {
+        if (S.me && S.turn === S.me && S.dbg.fen && !S.dbg.err) { cancelAnalysis(); const id = S.reqId; analyze(id, S.dbg.fen); }
+      },
       eloChanged: () => {
         clearTimeout(S.eloTimer);
         S.eloTimer = setTimeout(() => { if (S.me && S.turn === S.me && S.dbg.fen && !S.dbg.err) { const id = ++S.reqId; analyze(id, S.dbg.fen); } }, 350);
