@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.2.0
+// @version      1.3.0
 // @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -134,9 +134,11 @@
   const FILES = 'abcdefgh';
   const sqName = (i) => FILES[i & 7] + ((i >> 3) + 1);
   const sqIdx = (s) => (s.charCodeAt(0) - 97) + (s.charCodeAt(1) - 49) * 8;
+  const mirrorSq = (i) => (7 - (i >> 3)) * 8 + (i & 7);
   const isWhitePc = (ch) => ch >= 'A' && ch <= 'Z';
   const VAL = { p: 100, n: 300, b: 300, r: 500, q: 900, k: 0 };
   const ATT_VAL = { p: 100, n: 300, b: 300, r: 500, q: 900, k: 2000 };
+  const PROMO_NAME = { n: 'kuda', r: 'benteng', b: 'gajah', q: 'ratu' };
   const START_PLACEMENT = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
   const KN = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
   const KG = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
@@ -440,6 +442,9 @@
     if (m.t === 'p' && (m.fromFile === 3 || m.fromFile === 4) && ctx.opening) { b += 25; tags.push('pion tengah'); }
     if (m.t === 'p' && (m.fromFile === 2 || m.fromFile === 5) && ctx.opening) b += 8;
     if (m.capture && m.capVal >= m.movedVal - 50) { b += 22; tags.push(m.capVal > m.movedVal ? 'ambil materi' : 'tukar'); }
+    const ol = ctx.oppLast;
+    if (ol && m.capture && m.to === ol.to) { b += 28; tags.push('makan balik'); }
+    if ((m.t === 'n' || m.t === 'b') && Math.abs(m.toFile - 3.5) <= 1.5 && Math.abs(m.toRank - 3.5) <= 1.5) b += 10;
     if (m.check) { b += 8; tags.push('skak'); }
     if (m.t === 'k' && !m.castle && ctx.opening) b -= 35;
     if (m.t === 'q' && ctx.opening && m.fromRank === 0) b -= 30;
@@ -447,25 +452,35 @@
     if (m.t === 'n' && edgeFile) b -= 20;
     if ((m.t === 'n' || m.t === 'b' || m.t === 'r' || m.t === 'q') && m.toRank === 0 && m.fromRank !== 0) b -= 12;
     if (ctx.lastMine && ctx.lastMine.to === m.from && ctx.opening) b -= 12;
+    if (m.r.promo && m.r.promo !== 'q') b -= 40;
     return { b, tags };
   }
 
-  function trollEval(c, ctx) {
+  function trollEval(c, ctx, best) {
     const m = moveInfo(ctx, c);
     const tags = [];
     let b = 0;
     if (!m) return { b, tags };
+    const winning = best >= 300;
+    const mateAvail = best >= 90000;
+    const isMate = c.mate != null && c.mate > 0;
+
     if (m.t === 'q' && ctx.opening) { b += 40 + (m.toRank >= 3 ? 10 : 0); tags.push('Q keluar awal'); }
     if (m.t === 'p' && (m.toFile === 0 || m.toFile === 7) && (m.fromFile === 0 || m.fromFile === 7)) {
       b += 30 + (Math.abs(m.toRank - m.fromRank) === 2 ? 8 : 0); tags.push('pion pinggir');
     }
     const lm = ctx.lastMine;
     if (m.t === 'n' && lm && lm.piece === 'n' && lm.to === m.from && lm.from === m.to) { b += 45; tags.push('knight bolak-balik'); }
+    if (m.t === 'k' && !m.castle && ctx.opening && !m.capture) { b += 30; tags.push('Bongcloud'); }
     const canCastle = ctx.white ? /[KQ]/.test(ctx.rights) : /[kq]/.test(ctx.rights);
     if (canCastle && ctx.opening) {
       if (m.castle) b -= 10;
       else { b += 12; tags.push('rokade ditunda'); }
     }
+
+    const ol = ctx.oppLast;
+    if (ol && m.from === mirrorSq(ol.from) && m.to === mirrorSq(ol.to)) { b += 40; tags.push('niru langkah lawan'); }
+
     const before = new Set(ctx.attackedBefore);
     let bait = 0;
     for (const a of attackedPieces(m.r.bd, ctx.white)) {
@@ -475,6 +490,16 @@
       else bait = Math.max(bait, 12);
     }
     if (bait) { b += bait; tags.push('tahan bidak yang bisa dimakan'); }
+
+    if (winning) {
+      if (isMate) b -= 90;
+      else if (mateAvail) { b += 35; tags.push('sengaja nggak skakmat'); }
+      if (m.r.promo && m.r.promo !== 'q') { b += 55; tags.push('promosi jadi ' + PROMO_NAME[m.r.promo]); }
+      if (m.capture && m.capVal <= 100 && !isMate) { b += 18; tags.push('sikat pion dulu'); }
+      if ((m.t === 'k' || m.t === 'r') && !m.capture && !m.check) { b += 12; tags.push('muter-muter'); }
+      if (m.toRank < m.fromRank && !m.capture) { b += 8; tags.push('mundur dulu'); }
+      if (m.check && !isMate) { b += 10; tags.push('skak iseng'); }
+    }
     return { b, tags };
   }
 
@@ -504,33 +529,38 @@
       if (pool.length) base = pool[Math.floor(rnd() * pool.length)];
     }
 
-    let pick = base, tags = [], styleUsed = ctx.style, note = '';
+    let pick = base, tags = [], styleUsed = ctx.style, note = '', trollWin = false;
     const humanPick = () => {
-      const budget = Math.max(base.loss, 50);
-      let cands = cs.filter((c) => (c.loss <= budget && safe(c)) || c === base);
+      const budget = Math.max(base.loss, T.t2);
+      const cands = cs.filter((c) => (c.loss <= budget && safe(c)) || c === base);
       const ev = new Map();
       cands.forEach((c) => ev.set(c, humanEval(c, ctx)));
-      if (cands.length > 1 && rnd() < 0.12) {
-        const top = cands.reduce((a, b) => (ev.get(b).b - 0.7 * b.loss > ev.get(a).b - 0.7 * a.loss ? b : a));
-        const rest = cands.filter((c) => c !== top);
-        if (rest.length) cands = rest;
-      }
-      const p = sampleWeighted(cands, (c) => ev.get(c).b - 0.7 * c.loss + (c === base ? 8 : 0), 18, rnd);
-      return { p, tags: ev.get(p).tags };
+      const wt = (c) => ev.get(c).b - 0.6 * c.loss + (c === base ? 10 : 0);
+      const slipPool = cands.filter((c) => c.loss >= 15 && c.loss <= T.t2);
+      const slip = slipPool.length > 0 && rnd() < (ctx.humanSlip == null ? 0.35 : ctx.humanSlip);
+      const pool = slip ? slipPool : cands;
+      const p = sampleWeighted(pool, wt, 18, rnd);
+      const t = ev.get(p).tags.slice();
+      if (p.loss >= 15) t.push('agak meleset');
+      return { p, tags: t };
     };
 
     if (ctx.style === 'human') {
       const h = humanPick();
       pick = h.p; tags = h.tags;
     } else if (ctx.style === 'troll') {
-      const budget = Math.max(base.loss, 120);
-      const cands = cs.filter((c) => c.loss <= budget && safe(c));
+      const winning = best >= 300;
+      const floor = Math.max(250, Math.min(best - 400, 600));
+      const cands = winning
+        ? cs.filter((c) => c.score >= floor)
+        : cs.filter((c) => c.loss <= Math.max(base.loss, 120) && safe(c));
       const ev = new Map();
-      cands.forEach((c) => ev.set(c, trollEval(c, ctx)));
-      const good = cands.filter((c) => ev.get(c).b >= 20);
+      cands.forEach((c) => ev.set(c, trollEval(c, ctx, best)));
+      const good = winning ? cands : cands.filter((c) => ev.get(c).b >= 20);
       if (good.length) {
-        pick = sampleWeighted(good, (c) => ev.get(c).b - 0.35 * c.loss, 15, rnd);
+        pick = sampleWeighted(good, (c) => ev.get(c).b - (winning ? 0 : 0.35 * c.loss), 15, rnd);
         tags = ev.get(pick).tags;
+        trollWin = winning;
       } else {
         const h = humanPick();
         pick = h.p; tags = h.tags; styleUsed = 'human';
@@ -538,14 +568,15 @@
       }
     }
 
-    const tiers = { 1: bestC, 2: null, 3: null };
-    const pickTier = pick === bestC ? 1 : tierOf(pick);
-    if (pick !== bestC) {
+    const styleGreen = ctx.style !== 'bot' && pick !== bestC && (trollWin || safe(pick));
+    const tiers = { 1: styleGreen ? pick : bestC, 2: null, 3: null };
+    const pickTier = pick === bestC || styleGreen ? 1 : tierOf(pick);
+    if (!styleGreen && pick !== bestC) {
       if (pickTier === 1 || pickTier === 2) tiers[2] = pick;
       else if (pickTier === 3) tiers[3] = pick;
     }
     const risk = (c) => (c.score <= -90000 && best > -90000 ? 2 : 0) + (best >= 200 && c.score < 100 ? 1 : 0);
-    const taken = () => new Set([bestC, pick, tiers[2], tiers[3]].filter(Boolean));
+    const taken = () => new Set([bestC, pick, tiers[1], tiers[2], tiers[3]].filter(Boolean));
     if (!tiers[3]) {
       const used = taken();
       const rest = cs.filter((c) => !used.has(c));
@@ -568,7 +599,7 @@
         });
       }
     }
-    return { cs, best, bestC, pick, base, tiers, tags, styleUsed, note, pickTier, evalScore: bestC.score, evalMate: bestC.mate };
+    return { cs, best, bestC, pick, base, tiers, tags, styleUsed, note, pickTier, trollWin, evalScore: bestC.score, evalMate: bestC.mate };
   }
 
   function parseInfo(line) {
@@ -903,7 +934,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
             '<div class="seg"><button data-style="bot">Bot</button><button data-style="human">Manusia</button><button data-style="troll">Troll</button></div>' +
             '<div class="note" data-r="stylenote" style="margin-top:6px"></div></div>' +
           '<div><div class="lbl" style="margin-bottom:6px">Panah</div><div class="chips">' +
-            '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Terbaik</label>' +
+            '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Utama</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t2"><span class="dot" style="background:' + TIER_COLOR[2] + '"></span>Biasa aja</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Meleset dikit</label>' +
           '</div></div>' +
@@ -1003,8 +1034,8 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
 
     const STYLE_NOTE = {
       bot: 'Langkah terbaik Stockfish, dingin dan akurat.',
-      human: 'Pilih yang natural (develop, tukar, skak, rokade), sesekali agak meleset.',
-      troll: 'Main-main dan nyepelein lawan, tapi tetap aman (nggak blunder).',
+      human: 'Natural kayak manusia: develop, rokade, makan balik. Sering agak meleset, jadi hijau pun nggak selalu terbaik.',
+      troll: 'Nyepelein lawan: Q keluar awal, pion pinggir, niru langkah, nggak buru-buru skakmat, promosi jadi kuda. Tetap aman.',
     };
     function eloText(v) { return v >= 3000 ? '3000+ (penuh)' : '~' + v; }
     function renderSettings() {
@@ -1468,9 +1499,11 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const white = S.me === 'w';
       const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
       const ctx = {
-        bd: L.bd, white, rights: S.rights || '', lastMine: S.lastMove[S.me], plan, style: S.settings.style,
+        bd: L.bd, white, rights: S.rights || '', lastMine: S.lastMove[S.me], oppLast: S.lastMove[white ? 'b' : 'w'],
+        plan, style: S.settings.style,
         opening: pieceCount(L.bd) >= 26 && undevMinors(L.bd, white) >= 2,
         attackedBefore: attackedPieces(L.bd, white).map((a) => a.i),
+        humanSlip: 0.3 + 0.3 * (1 - S.settings.elo / 3000),
         seed: L.fen + '|' + S.settings.style + '|' + S.settings.elo,
       };
       const d = decide(L.res, ctx);
@@ -1486,11 +1519,16 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (d.pickTier === 0 && S.settings.tiers.t3) arrows.push({ move: d.pick.move, tier: 0, emph: true });
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
       const styleName = { bot: 'Bot', human: 'Manusia', troll: 'Troll' }[d.styleUsed];
-      const tierName = { 1: d.pick === d.bestC ? 'terbaik' : 'hampir terbaik', 2: 'biasa', 3: 'jelek tapi aman', 0: 'di luar batas aman (tiruan Elo rendah)' }[d.pickTier] || '';
+      const tierName = {
+        1: d.pick === d.bestC ? 'terbaik' : (d.trollWin ? 'masih menang' : 'hampir terbaik'),
+        2: 'biasa', 3: 'jelek tapi aman', 0: 'di luar batas aman (tiruan Elo rendah)',
+      }[d.pickTier] || '';
       const ev = fmtEval(d.evalScore, d.evalMate);
       const sub = ['Eval ' + ev + (d.evalScore >= 150 ? ' (kamu unggul)' : d.evalScore <= -150 ? ' (kamu ketinggalan)' : ' (seimbang)'),
         styleName + (tierName ? ' · ' + tierName : '') + (d.tags.length ? ' · ' + d.tags.join(', ') : '')].join('\n');
-      ui.setSuggestion(describeMove(L.bd, d.pick.move), sub + (d.note ? '\n' + d.note : ''));
+      const bestLine = d.styleUsed !== 'bot' && d.pick !== d.bestC
+        ? '\nTerbaik engine: ' + describeMove(L.bd, d.bestC.move) + ' (' + fmtEval(d.bestC.score, d.bestC.mate) + ')' : '';
+      ui.setSuggestion(describeMove(L.bd, d.pick.move), sub + bestLine + (d.note ? '\n' + d.note : ''));
       status('ok', 'Siap · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth);
     }
 
