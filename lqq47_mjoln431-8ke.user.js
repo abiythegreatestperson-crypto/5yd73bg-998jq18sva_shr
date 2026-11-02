@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.3.0
-// @description  Saran langkah + panah (Stockfish 19)
+// @version      1.7.0
+// @description  Saran langkah + panah (Stockfish 19) untuk semua halaman di chess.com tanpa komentar
 // @match        https://www.chess.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -17,12 +17,23 @@
 // @connect      cdn.jsdelivr.net
 // ==/UserScript==
 
+/*
+ * Catur Bantu: pembantu main catur di Chess.com (Tanpa Komentar).
+ *
+ * - Aktif di semua halaman chess.com (SPA, otomatis menyesuaikan).
+ * - Engine utama: Stockfish native di Termux lewat bridge.py (http://127.0.0.1:8765).
+ * - Cadangan: Stockfish.js 19.0.1 lite single-thread (WASM) dari GitHub release.
+ */
 (function () {
   'use strict';
 
+  /* =====================================================================
+   * KONFIGURASI
+   * ===================================================================== */
   const CFG = {
     name: 'Catur Bantu',
     host: 'www.chess.com',
+    pathRe: /.*/,
     bridge: 'http://127.0.0.1:8765',
     wasmSources: [
       'https://github.com/nmrugg/stockfish.js/releases/download/v19.0.1/',
@@ -31,9 +42,9 @@
     wasmJs: 'stockfish-19-lite-single.js',
     wasmBin: 'stockfish-19-lite-single.wasm',
     presets: {
-      peluru: { movetime: 100, probeTime: 50, multipv: 3, multipvWasm: 3, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
-      kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
-      cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
+      peluru: { movetime: 100, probeTime: 50, multipv: 3, multipvWasm: 3, specCands: 3, specMax: 4, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
+      kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, specCands: 4, specMax: 6, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
+      cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, specCands: 5, specMax: 8, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
     },
     defaultSpeed: 'kilat',
     tier: { t1: 30, t2: 100, t3: 150 },
@@ -42,25 +53,36 @@
     clockPollMs: 150,
     clockSettleMs: 350,
     clockTickMs: 1300,
+    premoveMissDelayMs: 900,
+    speculate: true,
+    specWindow: 100,
+    specWasmCands: 2,
+    oppElo: null,
   };
 
   try {
     if (typeof GM_getValue === 'function') {
       const t = GM_getValue('cch_test_config');
       if (t && typeof t === 'object') Object.assign(CFG, t);
+      if (t && typeof t === 'object' && typeof t.pathRe === 'string') CFG.pathRe = new RegExp(t.pathRe);
     }
-  } catch (e) {}
+  } catch (e) { /* abaikan */ }
 
   const DEFAULTS = {
     v: 1,
     elo: 3000,
     style: 'bot',
     speed: 'kilat',
+    premove: false,
     tiers: { t1: true, t2: true, t3: true },
     pos: null,
   };
 
+  /* =====================================================================
+   * UTIL
+   * ===================================================================== */
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const logBuf = [];
   function dbg(msg) {
     const d = new Date();
@@ -75,7 +97,7 @@
           const v = GM_getValue(k);
           return v === undefined ? d : v;
         }
-      } catch (e) {}
+      } catch (e) { /* lanjut ke localStorage */ }
       try {
         const v = localStorage.getItem('cch:' + k);
         return v === null ? d : JSON.parse(v);
@@ -84,8 +106,8 @@
     set(k, v) {
       try {
         if (typeof GM_setValue === 'function') { GM_setValue(k, v); return; }
-      } catch (e) {}
-      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) {}
+      } catch (e) { /* lanjut */ }
+      try { localStorage.setItem('cch:' + k, JSON.stringify(v)); } catch (e) { /* abaikan */ }
     },
   };
 
@@ -127,10 +149,13 @@
         });
       } catch (e) { fail(String(e && e.message || e)); }
     });
-    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) {} };
+    p.abort = () => { try { if (handle && handle.abort) handle.abort(); } catch (e) { /* abaikan */ } };
     return p;
   }
 
+  /* =====================================================================
+   * CORE CATUR (murni, tanpa DOM)
+   * ===================================================================== */
   const FILES = 'abcdefgh';
   const sqName = (i) => FILES[i & 7] + ((i >> 3) + 1);
   const sqIdx = (s) => (s.charCodeAt(0) - 97) + (s.charCodeAt(1) - 49) * 8;
@@ -698,7 +723,7 @@
             const hit = await c.match(url);
             if (hit) return { data: type === 'text' ? await hit.text() : await hit.arrayBuffer(), url };
           }
-        } catch (e) {}
+        } catch (e) { /* cache nggak ada, lanjut */ }
         try {
           const r = await gmRequest({ url, responseType: type === 'text' ? 'text' : 'arraybuffer', timeout: 60000 });
           if (r.status !== 200) throw new Error('HTTP ' + r.status);
@@ -709,7 +734,7 @@
               const c = await caches.open('catur-bantu-v1');
               await c.put(url, new Response(data));
             }
-          } catch (e) {}
+          } catch (e) { /* abaikan */ }
           return { data, url };
         } catch (e) { errs.push(url + ' -> ' + e.message); }
       }
@@ -725,7 +750,7 @@
 
     _fail(kind, msg) {
       this.state = 'failed'; this.failure = kind;
-      try { if (this.worker) this.worker.terminate(); } catch (e) {}
+      try { if (this.worker) this.worker.terminate(); } catch (e) { /* abaikan */ }
       this.worker = null; this.applied = {}; this.searching = false;
       const s = this.sink; this.sink = null;
       const er = new Error(msg); er.kind = 'wasm'; er.wasmFailure = kind;
@@ -846,17 +871,20 @@
         return out;
       };
       const p = this.chain.then(run, run);
-      this.chain = p.catch(() => {});
+      this.chain = p.catch(() => { /* rantai tetap jalan */ });
       return p;
     }
 
     terminate() {
       this.gen++;
-      try { if (this.worker) this.worker.terminate(); } catch (e) {}
+      try { if (this.worker) this.worker.terminate(); } catch (e) { /* abaikan */ }
       this.worker = null; this.state = 'idle'; this.applied = {}; this.sink = null; this.searching = false;
     }
   }
 
+  /* =====================================================================
+   * UI (Shadow DOM, gaya krem + terakota)
+   * ===================================================================== */
   const NS_SVG = 'http://www.w3.org/2000/svg';
   const TIER_COLOR = { 0: '#7d7a72', 1: '#3f9d66', 2: '#e0a526', 3: '#d4543f' };
 
@@ -883,10 +911,10 @@
   display:grid;place-items:center;cursor:pointer;padding:0}
 .ibtn:active{background:var(--border)}
 .body{padding:2px 16px 14px;display:flex;flex-direction:column;gap:11px}
-.card{background:var(--surface);border-radius:16px;padding:10px 14px;min-height:72px}
+.card{background:var(--surface);border-radius:16px;padding:10px 14px;min-height:50px}
 .lbl{font-size:12px;color:var(--muted);letter-spacing:.02em}
 .move{font:600 26px/1.2 ui-serif,Georgia,serif;margin-top:2px;word-break:break-word}
-.sub{font-size:13px;color:var(--muted);margin-top:2px;white-space:pre-line}
+.sub{display:none}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .val{font-weight:600}
 input[type=range]{width:100%;height:30px;accent-color:var(--accent);margin:0}
@@ -905,6 +933,12 @@ input[type=range]{width:100%;height:30px;accent-color:var(--accent);margin:0}
 details{background:var(--surface);border-radius:12px;padding:8px 12px}
 summary{cursor:pointer;font-size:13px;color:var(--muted)}
 pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto}
+.tbtn{width:100%;display:flex;justify-content:space-between;align-items:center;border:0;background:var(--surface);color:var(--text);
+  padding:10px 12px;border-radius:12px;font:600 14px system-ui,sans-serif;cursor:pointer}
+.tbtn .sw{width:38px;height:22px;border-radius:11px;background:var(--border);position:relative;flex:none;transition:background .15s}
+.tbtn .sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.tbtn.on .sw{background:var(--accent)}
+.tbtn.on .sw::after{transform:translateX(16px)}
 .mini{display:flex;gap:6px;margin-top:8px}
 .mini button{flex:1;border:0;border-radius:9px;background:var(--bg);color:var(--text);padding:8px;font:600 12px system-ui,sans-serif;cursor:pointer}
 `;
@@ -923,7 +957,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           '<button class="ibtn" data-act="min" title="Kecilkan">−</button>' +
           '<button class="ibtn" data-act="close" title="Tutup sampai reload">×</button></div>' +
         '<div class="body">' +
-          '<div class="card"><div class="lbl">Saran</div><div class="move" data-r="move">—</div><div class="sub" data-r="sub">Nunggu papan…</div></div>' +
+          '<div class="card"><div class="lbl">Saran</div><div class="move" data-r="move">—</div></div>' +
           '<div><div class="row"><span class="lbl">Elo mesin</span><span class="val" data-r="elo">3000+</span></div>' +
             '<input type="range" min="100" max="3000" step="50" data-r="slider">' +
             '<div class="note" data-r="elonote"></div></div>' +
@@ -933,6 +967,8 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
           '<div><div class="lbl" style="margin-bottom:6px">Gaya saran</div>' +
             '<div class="seg"><button data-style="bot">Bot</button><button data-style="human">Manusia</button><button data-style="troll">Troll</button></div>' +
             '<div class="note" data-r="stylenote" style="margin-top:6px"></div></div>' +
+          '<div><button class="tbtn" data-premove><span>Premove</span><span class="sw"></span></button>' +
+            '<div class="note" data-r="premovenote" style="margin-top:6px"></div></div>' +
           '<div><div class="lbl" style="margin-bottom:6px">Panah</div><div class="chips">' +
             '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Utama</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t2"><span class="dot" style="background:' + TIER_COLOR[2] + '"></span>Biasa aja</label>' +
@@ -946,9 +982,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     const $ = (sel) => root.querySelector(sel);
     const el = {
       arrows: $('.arrows'), fab: $('.fab'), panel: $('.panel'), hd: $('.hd'),
-      move: $('[data-r=move]'), sub: $('[data-r=sub]'), elo: $('[data-r=elo]'), slider: $('[data-r=slider]'),
+      move: $('[data-r=move]'), elo: $('[data-r=elo]'), slider: $('[data-r=slider]'),
       elonote: $('[data-r=elonote]'), stylenote: $('[data-r=stylenote]'), speednote: $('[data-r=speednote]'), led: $('[data-r=led]'),
       status: $('[data-r=status]'), debug: $('[data-r=debug]'),
+      premovebtn: $('[data-premove]'), premovenote: $('[data-r=premovenote]'),
     };
     const FAB = 48;
     let open = false;
@@ -987,7 +1024,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         if (e.target.closest && e.target.closest('button')) return;
         id = e.pointerId; moved = false; sx = e.clientX; sy = e.clientY;
         const p = getXY(); ox = p[0]; oy = p[1];
-        try { handle.setPointerCapture(id); } catch (er) {}
+        try { handle.setPointerCapture(id); } catch (er) { /* abaikan */ }
       });
       handle.addEventListener('pointermove', (e) => {
         if (id !== e.pointerId) return;
@@ -997,7 +1034,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       });
       const end = (e) => {
         if (id !== e.pointerId) return;
-        try { handle.releasePointerCapture(id); } catch (er) {}
+        try { handle.releasePointerCapture(id); } catch (er) { /* abaikan */ }
         id = null;
         if (moved) savePos(); else if (onTap) onTap();
       };
@@ -1021,7 +1058,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       const done = () => dbg('disalin ' + t.length + ' karakter');
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done, () => fallback()); return; }
-      } catch (e) {}
+      } catch (e) { /* lanjut */ }
       fallback();
       function fallback() {
         try {
@@ -1044,6 +1081,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       root.querySelectorAll('[data-style]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-style') === S.settings.style));
       root.querySelectorAll('[data-tier]').forEach((c) => { c.checked = !!S.settings.tiers[c.getAttribute('data-tier')]; });
       el.stylenote.textContent = STYLE_NOTE[S.settings.style];
+      el.premovebtn.classList.toggle('on', !!S.settings.premove);
+      el.premovenote.textContent = S.settings.premove
+        ? 'Nyala: panah tebakan lawan tampil pas giliran lawan (buat premove). Tebakan meleset = panah hilang, muncul lagi setelah jeda.'
+        : 'Mati: panah muncul pas giliran kamu. Tebakan tetap disiapin diam-diam, jadi panahnya langsung keluar kalau lawan main sesuai tebakan.';
       root.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-speed') === S.settings.speed));
       const sp = CFG.presets[S.settings.speed] || CFG.presets[CFG.defaultSpeed];
       el.speednote.textContent = sp.hint + ' (~' + String(sp.movetime / 1000).replace('.', ',') + ' detik, ' + sp.multipv + ' kandidat)';
@@ -1066,6 +1107,10 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.settings.style = b.getAttribute('data-style');
       renderSettings(); handlers.save(); handlers.styleChanged();
     }));
+    el.premovebtn.addEventListener('click', () => {
+      S.settings.premove = !S.settings.premove;
+      renderSettings(); handlers.save(); handlers.premoveChanged();
+    });
     root.querySelectorAll('[data-speed]').forEach((b) => b.addEventListener('click', () => {
       S.settings.speed = b.getAttribute('data-speed');
       renderSettings(); handlers.save(); handlers.speedChanged();
@@ -1085,6 +1130,9 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
         'giliran : ' + (d.turn || '?') + ' (' + (d.turnSrc || '-') + ') | kamu: ' + (d.me || '-'),
         'jam     : ' + (d.clock || '-'),
         'kandidat: ' + (d.cands || '-'),
+        'tebakan : ' + (d.pre || '-'),
+        'skor teb: kena ' + S.specStat.hit + ' | nyambung ' + S.specStat.adopt + ' | meleset ' + S.specStat.miss,
+        'lawan   : Elo ' + (d.oppElo || '?') + ' | tebak ' + (d.specK || '-') + ' langkah (naik ' + S.specBoost + ')',
         'FEN     : ' + (d.fen || '-'),
         'engine  : ' + (d.engine || '-'),
         'terakhir: ' + (d.last || '-'),
@@ -1099,11 +1147,13 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       el.status.textContent = text;
       renderDebug();
     }
-    function setSuggestion(main, sub) {
+    
+    // HANYA MENAMPILKAN LANGKAH SAJA (TANPA KOMENTAR/SUB-TEKS)
+    function setSuggestion(main) {
       el.move.textContent = main || '—';
-      el.sub.textContent = sub || '';
     }
 
+    // ---- panah ----
     let lastArrows = null;
     function drawArrows(arrows, bd, flipped, board) {
       lastArrows = arrows ? { arrows, flipped, board } : null;
@@ -1169,18 +1219,21 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       host, setStatus, setSuggestion, drawArrows, relayout, renderSettings, renderDebug,
       setVisible(v) { host.style.display = v ? '' : 'none'; },
       destroy() {
-        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) {}
+        try { window.removeEventListener('resize', relayout); window.removeEventListener('scroll', relayout, true); } catch (e) { /* abaikan */ }
         host.remove();
       },
     };
   }
 
-  function onActivePage() {
-    return location.hostname === CFG.host;
+  /* =====================================================================
+   * KONTROLER
+   * ===================================================================== */
+  function onChessPage() {
+    return location.hostname === CFG.host && CFG.pathRe.test(location.pathname);
   }
 
   function init() {
-    if (!onActivePage()) return;
+    if (!onChessPage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1189,7 +1242,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       sig: '', prevBd: null, rights: null, turn: null, turnSrc: '', lastMove: { w: null, b: null },
       boardTurn: null, boardTurnSrc: '', needRun: true, arb: { since: 0 }, clockMem: {}, flippedSeen: null, pendingShown: false,
       flipped: false, me: null,
-      reqId: 0, last: null, ep: '',
+      reqId: 0, last: null, ep: '', pingP: null, oppElo: null, specBoost: 0, spec: null, specHit: null, specAdopt: null, specStat: { hit: 0, adopt: 0, miss: 0 }, preMiss: false,
       dbg: {}, uciMin: 1320, uciMax: 3190,
       bridgeOk: false, bridgeChecked: false, bridgeErr: '', lastPing: 0, pinging: false,
       snapTimer: 0, snapTries: 0, tickTimer: 0, clockTimer: 0, redrawTimer: 0, eloTimer: 0,
@@ -1198,6 +1251,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
     if (!['bot', 'human', 'troll'].includes(S.settings.style)) S.settings.style = 'bot';
     if (!CFG.presets[S.settings.speed]) S.settings.speed = CFG.defaultSpeed;
     S.settings.elo = clamp(+S.settings.elo || 3000, 100, 3000);
+    S.settings.premove = !!S.settings.premove;
 
     const bridge = new BridgeEngine(CFG.bridge);
     const wasm = new WasmEngine(CFG);
@@ -1216,8 +1270,13 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (ui) ui.setStatus(kind, text);
     }
 
-    async function pingBridge() {
-      if (S.pinging || S.dead) return;
+    function pingBridge() {
+      if (S.dead) return Promise.resolve();
+      if (S.pinging) return S.pingP || Promise.resolve();
+      S.pingP = doPing();
+      return S.pingP;
+    }
+    async function doPing() {
       S.pinging = true;
       try {
         const j = await bridge.ping();
@@ -1301,12 +1360,24 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
 
       if (changedPos) {
-        cancelAnalysis();
+        const spec = S.spec;
+        const shown = !!(S.last && S.last.pre);
+        const hitLast = spec ? spec.cache.get(placement) || null : null;
+        const adopt = spec && !hitLast && spec.inflight && spec.inflight.placement === placement ? spec.inflight : null;
+        if (hitLast) cancelAnalysis(hitLast === S.last);
+        else if (adopt) { spec.stop = true; clearArrowsNow(); S.last = null; }
+        else cancelAnalysis();
+        if (spec) {
+          if (hitLast) { S.specStat.hit++; S.specBoost++; } else if (adopt) { S.specStat.adopt++; S.specBoost++; } else { S.specStat.miss++; S.specBoost = 0; }
+        }
+        S.specHit = hitLast; S.specAdopt = adopt;
+        S.preMiss = !hitLast && !adopt && S.settings.premove && shown;
+        S.spec = null;
         let turn = null, src = '';
         let diff = null;
         S.ep = '';
         if (placement === START_PLACEMENT) {
-          turn = 'w'; src = 'posisi awal'; S.rights = 'KQkq'; S.lastMove = { w: null, b: null };
+          turn = 'w'; src = 'posisi awal'; S.rights = 'KQkq'; S.lastMove = { w: null, b: null }; S.specBoost = 0;
         } else {
           diff = prev ? diffInfo(prev, snap.bd) : null;
           const dm = diff ? diff.mover : null;
@@ -1352,7 +1423,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       }
       els = els.filter((e) => e.getClientRects().length > 0);
       let midY = null;
-      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) {}
+      try { const br = board.getBoundingClientRect(); if (br.height > 0) midY = br.top + br.height / 2; } catch (e) { /* abaikan */ }
       return els.slice(0, 6).map((e) => {
         const cls = e.getAttribute('class') || '';
         let pos = /\bclock-bottom\b/.test(cls) ? 'bottom' : /\bclock-top\b/.test(cls) ? 'top' : null;
@@ -1380,7 +1451,6 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (d.pending) {
         if (!S.pendingShown) {
           S.pendingShown = true;
-          if (ui) ui.setSuggestion('—', 'Nyocokin jam dan papan…');
           status('warn', 'Jam dan papan belum sepakat, nunggu bentar…');
         }
         return;
@@ -1392,40 +1462,86 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (turnChanged || S.needRun) { S.needRun = false; onPositionReady(); }
     }
 
+    function readOppElo() {
+      let box = null;
+      for (const sel of ['#board-layout-player-top', '.board-layout-top', '[class*="player-top"]', '.player-top']) {
+        const e = document.querySelector(sel);
+        if (e) { box = e; break; }
+      }
+      if (!box) return null;
+      const ok = (v) => (v >= 100 && v <= 3600 ? v : null);
+      for (const e of box.querySelectorAll('[class*="rating"]')) {
+        const m = /(\d{3,4})/.exec(String(e.textContent || '').replace(/[,\s]/g, ''));
+        if (m && ok(+m[1])) return +m[1];
+      }
+      const txt = String(box.textContent || '');
+      let m = /\((\d{3,4})\)/.exec(txt);
+      if (m && ok(+m[1])) return +m[1];
+      const all = txt.match(/\b\d{3,4}\b/g);
+      if (all) { const v = +all[all.length - 1]; if (ok(v)) return v; }
+      return null;
+    }
+
     function clearArrowsNow() { if (ui) ui.drawArrows(null); }
 
-    function cancelAnalysis() {
+    function cancelAnalysis(keepArrows) {
       S.reqId++;
       bridge.abort();
       wasm.gen++; if (wasm.searching) wasm._send('stop');
-      clearArrowsNow();
-      S.last = null;
+      if (!keepArrows) { clearArrowsNow(); S.last = null; }
+    }
+
+    function showHit(last) {
+      S.dbg.err = ''; S.dbg.fen = last.fen; S.dbg.pre = '';
+      S.last = Object.assign({}, last, { bd: S.bd, flipped: S.flipped, board: S.board, pre: false, hit: true });
+      render();
     }
 
     async function onPositionReady() {
+      const turnMe = !!S.turn && S.turn === S.me;
+      if (turnMe && S.specHit) {
+        const hit = S.specHit; S.specHit = null; S.specAdopt = null; S.preMiss = false;
+        showHit(hit);
+        return;
+      }
+      if (turnMe && S.specAdopt) {
+        const ad = S.specAdopt; S.specAdopt = null; S.preMiss = false;
+        const id0 = S.reqId;
+        status('warn', 'Tebakan benar, nunggu hitungan yang lagi jalan…');
+        let last = null;
+        try { last = await ad.promise; } catch (e) { last = null; }
+        if (id0 !== S.reqId) return;
+        if (last) { showHit(last); return; }
+      }
       cancelAnalysis();
       const id = S.reqId;
       if (!S.turn) {
-        ui.setSuggestion('—', '');
         status('warn', 'Giliran belum ketahuan, tunggu langkah berikutnya.');
         return;
       }
       if (S.turn !== S.me) {
-        ui.setSuggestion('—', 'Giliran lawan');
-        status('ok', 'Giliran lawan.');
+        S.specHit = null; S.specAdopt = null; S.preMiss = false; S.spec = null;
+        if (S.settings.premove) { status('warn', 'Nebak langkah lawan…'); }
+        else { status('ok', 'Giliran lawan.'); }
+        if (CFG.speculate) await speculate(id);
         return;
       }
+      const miss = S.preMiss; S.preMiss = false; S.specHit = null; S.specAdopt = null;
       const bd = S.bd;
       const err = validateBoard(bd, S.turn);
       const fen = buildFEN(bd, S.turn, S.rights, S.ep);
       S.dbg.fen = fen;
       if (err) {
         S.dbg.err = err;
-        ui.setSuggestion('—', '');
         status('err', 'Posisi nggak valid: ' + err + '. Nggak dikirim ke engine.');
         return;
       }
       S.dbg.err = '';
+      if (miss) {
+        status('warn', 'Tebakan meleset, panah baru sebentar lagi…');
+        await sleep(CFG.premoveMissDelayMs);
+        if (id !== S.reqId) return;
+      }
       await analyze(id, fen);
     }
 
@@ -1439,52 +1555,61 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       };
     }
 
+    async function runEngine(id, fen, opt) {
+      opt = opt || {};
+      const mk = (usingWasm, plan) => {
+        const rq = buildRequest(fen, usingWasm, plan);
+        if (opt.multipv) rq.multipv = opt.multipv;
+        if (opt.probe !== undefined) rq.probe = opt.probe;
+        return rq;
+      };
+      let res = null, via = '';
+      if (S.bridgeOk) {
+        try {
+          const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
+          res = await bridge.analyze(mk(false, plan));
+          via = 'jembatan';
+        } catch (e) {
+          if (id !== S.reqId) return null;
+          if (e.kind === 'engine') throw e;
+          S.bridgeOk = false; S.bridgeErr = e.message;
+          dbg('jembatan gagal, pindah ke WASM: ' + e.message);
+          if (ui) ui.renderSettings();
+        }
+      }
+      if (id !== S.reqId) return null;
+      if (!res) {
+        if (wasm.state !== 'ready') status('warn', 'Jembatan tidak terhubung. Memuat WASM (±1,8 MB)…');
+        S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
+        const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
+        res = await wasm.analyze(mk(true, plan), (st) => { if (st === 'loading') status('warn', 'Memuat WASM (±1,8 MB)…'); });
+        S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
+        if (ui) ui.renderSettings();
+        via = 'WASM';
+      }
+      if (id !== S.reqId || res.cancelled) return null;
+      return { res, via };
+    }
+
+    function engineFail(e) {
+      const msg = String(e && e.message || e);
+      S.dbg.err = msg;
+      dbg('analisis gagal: ' + msg);
+      if (e.kind === 'wasm') {
+        status('err', e.wasmFailure === 'blocked' ? 'Worker diblokir (' + msg + ')' :
+          e.wasmFailure === 'download' ? 'WASM gagal diunduh (' + msg + ')' : 'Engine WASM error (' + msg + ')');
+      } else status('err', 'Engine error: ' + msg);
+    }
+
     async function analyze(id, fen) {
       if (!S.bridgeChecked) { status('warn', 'Mengecek jembatan…'); await pingBridge(); if (id !== S.reqId) return; }
       const t0 = performance.now();
       status('warn', 'Menghitung…');
-      let res = null, via = '';
-      try {
-        if (S.bridgeOk) {
-          try {
-            const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
-            res = await bridge.analyze(buildRequest(fen, false, plan));
-            via = 'jembatan';
-            res._plan = plan;
-          } catch (e) {
-            if (id !== S.reqId) return;
-            if (e.kind === 'engine') throw e;
-            S.bridgeOk = false; S.bridgeErr = e.message;
-            dbg('jembatan gagal, pindah ke WASM: ' + e.message);
-            if (ui) ui.renderSettings();
-          }
-        }
-        if (id !== S.reqId) return;
-        if (!res) {
-          if (wasm.state !== 'ready') status('warn', 'Jembatan tidak terhubung. Memuat WASM (±1,8 MB)…');
-          S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
-          const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
-          res = await wasm.analyze(buildRequest(fen, true, plan), (st) => { if (st === 'loading') status('warn', 'Memuat WASM (±1,8 MB)…'); });
-          S.uciMin = wasm.range.min; S.uciMax = wasm.range.max;
-          if (ui) ui.renderSettings();
-          via = 'WASM';
-          res._plan = plan;
-        }
-      } catch (e) {
-        if (id !== S.reqId) return;
-        const msg = String(e && e.message || e);
-        S.dbg.err = msg;
-        dbg('analisis gagal: ' + msg);
-        ui.setSuggestion('—', '');
-        if (e.kind === 'wasm') {
-          status('err', e.wasmFailure === 'blocked' ? 'Worker diblokir (' + msg + ')' :
-            e.wasmFailure === 'download' ? 'WASM gagal diunduh (' + msg + ')' : 'Engine WASM error (' + msg + ')');
-        } else status('err', 'Engine error: ' + msg);
-        return;
-      }
-      if (id !== S.reqId || res.cancelled) return;
+      let out;
+      try { out = await runEngine(id, fen); } catch (e) { if (id !== S.reqId) return; engineFail(e); return; }
+      if (!out) return;
+      const res = out.res, via = out.via;
       if (!res.lines || !res.lines.length) {
-        ui.setSuggestion('—', 'Nggak ada langkah');
         status('warn', 'Engine nggak nemu langkah (game selesai?).');
         return;
       }
@@ -1493,13 +1618,108 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       render();
     }
 
+    async function speculate(id) {
+      const bd = S.bd, oppTurn = S.turn;
+      const spec = { base: fenPlacement(bd), cache: new Map(), inflight: null, stop: false, first: null };
+      S.spec = spec;
+      const vis = () => S.settings.premove && S.spec === spec && !spec.stop;
+      const err = validateBoard(bd, oppTurn);
+      if (err) {
+        dbg('tebakan dilewati: ' + err);
+        if (S.settings.premove) { S.dbg.err = err; status('err', 'Posisi nggak valid: ' + err + '. Nggak dikirim ke engine.'); }
+        return;
+      }
+      S.dbg.err = '';
+      const fenOpp = buildFEN(bd, oppTurn, S.rights, S.ep);
+      S.dbg.fen = fenOpp;
+      if (!S.bridgeChecked) { await pingBridge(); if (id !== S.reqId) return; }
+      const pr = preset();
+      const baseK = pr.specCands || 3;
+      const K0 = Math.min(pr.specMax || baseK, baseK + S.specBoost);
+      const oppElo = CFG.oppElo || readOppElo() || S.oppElo || null;
+      if (oppElo) S.oppElo = oppElo;
+      S.dbg.oppElo = oppElo ? oppElo + (CFG.oppElo ? ' (manual)' : '') : null;
+      const oplan = oppElo ? eloPlan(oppElo, S.uciMin, S.uciMax, pr.probeTime) : null;
+      let o1;
+      try { o1 = await runEngine(id, fenOpp, { multipv: K0, probe: oplan ? oplan.probe : null }); } catch (e) {
+        if (id !== S.reqId) return;
+        if (vis()) engineFail(e); else dbg('tebakan gagal: ' + String(e && e.message || e));
+        return;
+      }
+      if (!o1) return;
+      const K = o1.via === 'jembatan' ? K0 : Math.min(K0, CFG.specWasmCands);
+      const lines = (o1.res.lines || []).slice().sort((x, y) => x.rank - y.rank);
+      const sc = lines.map(scoreOf);
+      const top = sc.length ? Math.max.apply(null, sc) : 0;
+      const win = oppElo ? Math.round(clamp(CFG.specWindow + (2800 - oppElo) / 8, CFG.specWindow, 350)) : CFG.specWindow;
+      const moves = [];
+      const bm = o1.res.bestmove || (lines[0] && lines[0].move);
+      if (bm) moves.push(bm);
+      const pb = o1.res.probe_bestmove;
+      if (pb && moves.indexOf(pb) < 0) moves.push(pb);
+      lines.forEach((l, i) => { if (top - sc[i] <= win && moves.indexOf(l.move) < 0) moves.push(l.move); });
+      const cands = moves.slice(0, K);
+      if (!cands.length) {
+        if (vis()) { status('warn', 'Nggak bisa nebak langkah lawan (game selesai?).'); }
+        return;
+      }
+      S.dbg.pre = cands.map((m) => describeMove(bd, m)).join(' | ') + ' (' + o1.via + ')';
+      S.dbg.specK = cands.length;
+      if (ui) ui.renderDebug();
+      for (let i = 0; i < cands.length; i++) {
+        if (S.spec !== spec || spec.stop || id !== S.reqId) return;
+        const t1 = performance.now();
+        const m = cands[i];
+        const ap = applyMove(bd, m);
+        if (!ap || isWhitePc(ap.piece) !== (oppTurn === 'w')) continue;
+        const rights2 = S.rights == null ? guessRights(ap.bd) : intersectRights(S.rights, guessRights(ap.bd));
+        let ep2 = '';
+        if (ap.piece.toLowerCase() === 'p' && Math.abs(ap.to - ap.from) === 16) {
+          const enemy = isWhitePc(ap.piece) ? 'p' : 'P';
+          const f = ap.to & 7;
+          if ((f > 0 && ap.bd[ap.to - 1] === enemy) || (f < 7 && ap.bd[ap.to + 1] === enemy)) ep2 = sqName((ap.to + ap.from) / 2);
+        }
+        const err2 = validateBoard(ap.bd, S.me);
+        if (err2) { dbg('tebakan ' + m + ' dilewati: ' + err2); continue; }
+        const placement = fenPlacement(ap.bd);
+        const fenMe = buildFEN(ap.bd, S.me, rights2, ep2);
+        const predText = describeMove(bd, m);
+        if (i === 0 && vis()) status('warn', 'Premove: hitung saran kalau lawan main ' + predText + '…');
+        const p = (async () => {
+          const o2 = await runEngine(id, fenMe);
+          if (!o2 || !o2.res.lines || !o2.res.lines.length) return null;
+          return {
+            res: o2.res, fen: fenMe, via: o2.via, ms: Math.round(performance.now() - t1), bd: ap.bd, flipped: S.flipped, board: S.board,
+            pre: true, predText, rights: rights2, oppLast: { from: ap.from, to: ap.to, piece: ap.piece.toLowerCase() },
+          };
+        })();
+        spec.inflight = { placement, promise: p };
+        let last = null;
+        try { last = await p; } catch (e) {
+          spec.inflight = null;
+          if (S.spec !== spec || id !== S.reqId) return;
+          if (i === 0 && vis()) engineFail(e); else dbg('tebakan ' + m + ' gagal: ' + String(e && e.message || e));
+          return;
+        }
+        spec.inflight = null;
+        if (last) { spec.cache.set(placement, last); if (i === 0) spec.first = last; }
+        if (S.spec !== spec || spec.stop || id !== S.reqId) return;
+        if (!last) continue;
+        if (i === 0) {
+          S.dbg.last = 'tebakan | ' + last.via + ' | ' + last.ms + ' ms | depth ' + last.res.depth + ' | ' + last.res.lines.length + ' kandidat';
+          if (vis()) { S.last = last; render(); }
+        }
+      }
+    }
+
     function render() {
       const L = S.last;
       if (!L || !ui) return;
       const white = S.me === 'w';
       const plan = eloPlan(S.settings.elo, S.uciMin, S.uciMax, preset().probeTime);
       const ctx = {
-        bd: L.bd, white, rights: S.rights || '', lastMine: S.lastMove[S.me], oppLast: S.lastMove[white ? 'b' : 'w'],
+        bd: L.bd, white, rights: L.rights != null ? L.rights : (S.rights || ''), lastMine: S.lastMove[S.me],
+        oppLast: L.oppLast !== undefined ? L.oppLast : S.lastMove[white ? 'b' : 'w'],
         plan, style: S.settings.style,
         opening: pieceCount(L.bd) >= 26 && undevMinors(L.bd, white) >= 2,
         attackedBefore: attackedPieces(L.bd, white).map((a) => a.i),
@@ -1518,18 +1738,12 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       }
       if (d.pickTier === 0 && S.settings.tiers.t3) arrows.push({ move: d.pick.move, tier: 0, emph: true });
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
-      const styleName = { bot: 'Bot', human: 'Manusia', troll: 'Troll' }[d.styleUsed];
-      const tierName = {
-        1: d.pick === d.bestC ? 'terbaik' : (d.trollWin ? 'masih menang' : 'hampir terbaik'),
-        2: 'biasa', 3: 'jelek tapi aman', 0: 'di luar batas aman (tiruan Elo rendah)',
-      }[d.pickTier] || '';
-      const ev = fmtEval(d.evalScore, d.evalMate);
-      const sub = ['Eval ' + ev + (d.evalScore >= 150 ? ' (kamu unggul)' : d.evalScore <= -150 ? ' (kamu ketinggalan)' : ' (seimbang)'),
-        styleName + (tierName ? ' · ' + tierName : '') + (d.tags.length ? ' · ' + d.tags.join(', ') : '')].join('\n');
-      const bestLine = d.styleUsed !== 'bot' && d.pick !== d.bestC
-        ? '\nTerbaik engine: ' + describeMove(L.bd, d.bestC.move) + ' (' + fmtEval(d.bestC.score, d.bestC.mate) + ')' : '';
-      ui.setSuggestion(describeMove(L.bd, d.pick.move), sub + bestLine + (d.note ? '\n' + d.note : ''));
-      status('ok', 'Siap · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth);
+      
+      // HANYA MENAMPILKAN LANGKAH SAJA (TANPA KOMENTAR / SUB-TEKS)
+      ui.setSuggestion(describeMove(L.bd, d.pick.move));
+      status('ok', L.pre ? 'Premove (tebakan ' + L.predText + ') · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth
+        : L.hit ? 'Tebakan lawan benar, udah dihitung duluan · ' + L.via + ' · depth ' + L.res.depth
+        : 'Siap · ' + L.via + ' · ' + L.ms + ' ms · depth ' + L.res.depth);
     }
 
     function attachBoard(board) {
@@ -1546,6 +1760,7 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.sig = ''; S.prevBd = null; S.rights = null; S.lastMove = { w: null, b: null };
       S.me = null; S.turn = null; S.boardTurn = null; S.boardTurnSrc = ''; S.arb.since = 0;
       S.clockMem = {}; S.needRun = true; S.flippedSeen = null; S.pendingShown = false;
+      S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false; S.specBoost = 0; S.oppElo = null;
       dbg('papan ketemu: ' + S.dbg.board);
       takeSnapshot(true);
     }
@@ -1557,21 +1772,20 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       if (S.observer) S.observer.disconnect();
       if (S.resizeObs) S.resizeObs.disconnect();
       S.observer = null; S.resizeObs = null; S.board = null;
+      S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
-      dbg('halaman tidak didukung, script istirahat');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
-      dbg('halaman didukung, script lanjut');
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!onActivePage()) { suspend(); return; }
+      if (!onChessPage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
@@ -1588,12 +1802,24 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       S.dead = true;
       clearInterval(S.tickTimer); clearInterval(S.clockTimer); clearTimeout(S.snapTimer); clearTimeout(S.eloTimer);
       S.reqId++;
-      try { bridge.abort(); } catch (e) {}
-      try { wasm.terminate(); } catch (e) {}
+      try { bridge.abort(); } catch (e) { /* abaikan */ }
+      try { wasm.terminate(); } catch (e) { /* abaikan */ }
       if (S.observer) S.observer.disconnect();
       if (S.resizeObs) S.resizeObs.disconnect();
       if (ui) ui.destroy();
       ui = null;
+    }
+
+    function recompute(clearFirst) {
+      if (S.dead || !S.me || !S.turn) return;
+      if (S.turn === S.me) {
+        if (!S.dbg.fen || S.dbg.err) return;
+        if (clearFirst) cancelAnalysis(); else S.reqId++;
+        analyze(S.reqId, S.dbg.fen);
+      } else if (CFG.speculate) {
+        cancelAnalysis(); S.spec = null;
+        speculate(S.reqId);
+      }
     }
 
     ui = createUI(S, {
@@ -1601,12 +1827,19 @@ pre{margin:8px 0 0;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-
       close: shutdown,
       redraw: () => render(),
       styleChanged: () => render(),
-      speedChanged: () => {
-        if (S.me && S.turn === S.me && S.dbg.fen && !S.dbg.err) { cancelAnalysis(); const id = S.reqId; analyze(id, S.dbg.fen); }
-      },
-      eloChanged: () => {
-        clearTimeout(S.eloTimer);
-        S.eloTimer = setTimeout(() => { if (S.me && S.turn === S.me && S.dbg.fen && !S.dbg.err) { const id = ++S.reqId; analyze(id, S.dbg.fen); } }, 350);
+      speedChanged: () => recompute(true),
+      eloChanged: () => { clearTimeout(S.eloTimer); S.eloTimer = setTimeout(() => recompute(false), 350); },
+      premoveChanged: () => {
+        S.preMiss = false;
+        if (S.dead || !S.me || !S.turn || S.turn === S.me) return;
+        if (S.settings.premove) {
+          if (S.spec && S.spec.first) { S.last = S.spec.first; render(); }
+          else if (!S.spec) { cancelAnalysis(); speculate(S.reqId); }
+          else { status('warn', 'Nebak langkah lawan…'); }
+        } else if (S.last && S.last.pre) {
+          clearArrowsNow(); S.last = null;
+          status('ok', 'Giliran lawan.');
+        }
       },
     });
     S.dbg.engine = engineLabel();
