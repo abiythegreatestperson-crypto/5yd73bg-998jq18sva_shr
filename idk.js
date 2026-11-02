@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Catur Bantu
 // @namespace    local.caturbantu
-// @version      1.7.0
+// @version      1.7.1
 // @description  Saran langkah + panah (Stockfish 19) untuk semua halaman di chess.com tanpa komentar
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 /*
- * Catur Bantu: pembantu main catur di Chess.com (Tanpa Komentar).
+ * Catur Bantu: pembantu main catur di Chess.com (Tanpa Komentar & Semua Halaman).
  *
  * - Aktif di semua halaman chess.com (SPA, otomatis menyesuaikan).
  * - Engine utama: Stockfish native di Termux lewat bridge.py (http://127.0.0.1:8765).
