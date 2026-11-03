@@ -2,7 +2,7 @@
 // @name         VoidChess
 // @namespace    local.voidchess
 // @version      1.0.2
-// @description  Saran langkah + panah (Stockfish 19) untuk semua halaman Chess.com
+// @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -23,6 +23,7 @@
   const CFG = {
     name: 'VoidChess',
     host: 'www.chess.com',
+    pathRe: /^\//,
     bridge: 'http://127.0.0.1:8765',
     wasmSources: [
       'https://github.com/nmrugg/stockfish.js/releases/download/v19.0.1/',
@@ -56,6 +57,7 @@
     if (typeof GM_getValue === 'function') {
       const t = GM_getValue('cch_test_config');
       if (t && typeof t === 'object') Object.assign(CFG, t);
+      if (t && typeof t === 'object' && typeof t.pathRe === 'string') CFG.pathRe = new RegExp(t.pathRe);
     }
   } catch (e) { }
 
@@ -1348,12 +1350,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
     };
   }
 
-  function onChessPage() {
-    return location.hostname === CFG.host;
+  function onValidPage() {
+    return location.hostname === CFG.host && CFG.pathRe.test(location.pathname);
   }
 
   function init() {
-    if (!onChessPage()) return;
+    if (!onValidPage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1474,19 +1476,23 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       processSnapshot(snap, placement);
     }
 
-    function isPremoveGhost(prev, bd) {
-      const spec = S.spec;
-      if (!prev || !spec || S.me == null || !S.turn || S.turn === S.me) return false;
-      if (spec.base !== fenPlacement(prev)) return false;
-      const d = diffInfo(prev, bd);
-      if (!d.arrivals.length || d.mover !== S.me) return false;
-      const mine = S.me === 'w';
-      let a = 0, b = 0;
+    function oppTurnSource() {
+      if (S.me == null || !S.turn || S.turn === S.me) return '';
+      let ck = null;
+      try { ck = clockTurn(readClocks(S.board), S.flipped ? 'b' : 'w', S.clockMem, Date.now(), CFG.clockTickMs); } catch (e) { }
+      if (ck && ck.turn) return ck.turn !== S.me ? 'jam' : '';
+      return 'papan';
+    }
+
+    function isPremoveGhost(prev, bd, placement) {
+      if (!prev || placement === START_PLACEMENT) return '';
+      const src = oppTurnSource();
+      if (!src) return '';
+      const oppWhite = S.me !== 'w';
       for (let i = 0; i < 64; i++) {
-        if (prev[i] && isWhitePc(prev[i]) === mine) a++;
-        if (bd[i] && isWhitePc(bd[i]) === mine) b++;
+        if (bd[i] && bd[i] !== prev[i] && isWhitePc(bd[i]) === oppWhite) return '';
       }
-      return a === b;
+      return src;
     }
 
     function processSnapshot(snap, placement) {
@@ -1497,8 +1503,9 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       S.dbg.me = S.me === 'w' ? 'putih' : 'hitam';
       if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
 
-      if (changedPos && isPremoveGhost(prev, snap.bd)) {
-        if (!S.premoveGhost) { S.premoveGhost = true; dbg('premove kamu kebaca di papan, panah dibiarin tetap'); }
+      const ghost = changedPos ? isPremoveGhost(prev, snap.bd, placement) : '';
+      if (ghost) {
+        if (!S.premoveGhost) { S.premoveGhost = true; dbg('premove kebaca, masih giliran lawan (dari ' + ghost + '), panah dibiarin tetap'); }
         return;
       }
       S.premoveGhost = false;
@@ -1990,7 +1997,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!onChessPage()) { suspend(); return; }
+      if (!onValidPage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
