@@ -2,7 +2,7 @@
 // @name         VoidChess
 // @namespace    local.voidchess
 // @version      1.0.2
-// @description  Saran langkah + panah (Stockfish 19) di semua halaman chess.com
+// @description  Saran langkah + panah (Stockfish 19) untuk semua halaman Chess.com
 // @match        https://www.chess.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -23,7 +23,6 @@
   const CFG = {
     name: 'VoidChess',
     host: 'www.chess.com',
-    pathRe: /.*/,
     bridge: 'http://127.0.0.1:8765',
     wasmSources: [
       'https://github.com/nmrugg/stockfish.js/releases/download/v19.0.1/',
@@ -57,7 +56,6 @@
     if (typeof GM_getValue === 'function') {
       const t = GM_getValue('cch_test_config');
       if (t && typeof t === 'object') Object.assign(CFG, t);
-      if (t && typeof t === 'object' && typeof t.pathRe === 'string') CFG.pathRe = new RegExp(t.pathRe);
     }
   } catch (e) { }
 
@@ -1350,12 +1348,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
     };
   }
 
-  function onBotPage() {
+  function onChessPage() {
     return location.hostname === CFG.host;
   }
 
   function init() {
-    if (!onBotPage()) return;
+    if (!onChessPage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1365,6 +1363,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       boardTurn: null, boardTurnSrc: '', needRun: true, arb: { since: 0 }, clockMem: {}, flippedSeen: null, pendingShown: false,
       flipped: false, me: null,
       reqId: 0, last: null, ep: '', pingP: null, oppElo: null, autoElo: null, specBoost: 0, spec: null, specHit: null, specAdopt: null, specStat: { hit: 0, adopt: 0, miss: 0 }, preMiss: false,
+      premoveGhost: false,
       dbg: {}, uciMin: 1320, uciMax: 3190,
       bridgeOk: false, bridgeChecked: false, bridgeErr: '', lastPing: 0, pinging: false,
       snapTimer: 0, snapTries: 0, tickTimer: 0, clockTimer: 0, redrawTimer: 0, eloTimer: 0,
@@ -1475,6 +1474,21 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       processSnapshot(snap, placement);
     }
 
+    function isPremoveGhost(prev, bd) {
+      const spec = S.spec;
+      if (!prev || !spec || S.me == null || !S.turn || S.turn === S.me) return false;
+      if (spec.base !== fenPlacement(prev)) return false;
+      const d = diffInfo(prev, bd);
+      if (!d.arrivals.length || d.mover !== S.me) return false;
+      const mine = S.me === 'w';
+      let a = 0, b = 0;
+      for (let i = 0; i < 64; i++) {
+        if (prev[i] && isWhitePc(prev[i]) === mine) a++;
+        if (bd[i] && isWhitePc(bd[i]) === mine) b++;
+      }
+      return a === b;
+    }
+
     function processSnapshot(snap, placement) {
       const prev = S.prevBd;
       const changedPos = !prev || fenPlacement(prev) !== placement;
@@ -1482,6 +1496,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       if (S.me == null || placement === START_PLACEMENT) S.me = snap.flipped ? 'b' : 'w';
       S.dbg.me = S.me === 'w' ? 'putih' : 'hitam';
       if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
+
+      if (changedPos && isPremoveGhost(prev, snap.bd)) {
+        if (!S.premoveGhost) { S.premoveGhost = true; dbg('premove kamu kebaca di papan, panah dibiarin tetap'); }
+        return;
+      }
+      S.premoveGhost = false;
 
       if (changedPos) {
         const spec = S.spec;
@@ -1943,6 +1963,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       S.me = null; S.turn = null; S.boardTurn = null; S.boardTurnSrc = ''; S.arb.since = 0;
       S.clockMem = {}; S.needRun = true; S.flippedSeen = null; S.pendingShown = false;
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false; S.specBoost = 0; S.oppElo = null;
+      S.premoveGhost = false;
       dbg('papan ketemu: ' + S.dbg.board);
       takeSnapshot(true);
     }
@@ -1957,19 +1978,19 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(7,5,15,.65);border:1px solid
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
-      dbg('bukan di chess.com, script istirahat');
+      dbg('bukan halaman chess.com, script istirahat');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
-      dbg('di chess.com, script lanjut');
+      dbg('balik ke halaman chess.com, script lanjut');
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!onBotPage()) { suspend(); return; }
+      if (!onChessPage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
