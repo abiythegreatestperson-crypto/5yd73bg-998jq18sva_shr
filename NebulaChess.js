@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NebulaChess
 // @namespace    local.nebulachess
-// @version      1.0.0
+// @version      1.2.0
 // @description  Saran langkah + panah (Stockfish 19)
 // @match        https://www.chess.com/*
 // @run-at       document-idle
@@ -23,7 +23,7 @@
   const CFG = {
     name: 'NebulaChess',
     host: 'www.chess.com',
-    pathRe: /^\//,
+    pathRe: /.*/,
     bridge: 'http://127.0.0.1:8765',
     wasmSources: [
       'https://github.com/nmrugg/stockfish.js/releases/download/v19.0.1/',
@@ -32,20 +32,23 @@
     wasmJs: 'stockfish-19-lite-single.js',
     wasmBin: 'stockfish-19-lite-single.wasm',
     presets: {
-      peluru: { movetime: 100, probeTime: 50, multipv: 4, multipvWasm: 4, specCands: 3, specMax: 4, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
-      kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, specCands: 4, specMax: 6, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
-      cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, specCands: 5, specMax: 8, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
+      peluru: { movetime: 100, probeTime: 50, multipv: 4, multipvWasm: 4, specCands: 3, specMax: 4, specDeep: 6, hint: 'Buat 1-2 menit: secepat mungkin, fokus ke langkah terbaik.' },
+      kilat: { movetime: 300, probeTime: 120, multipv: 6, multipvWasm: 6, specCands: 4, specMax: 6, specDeep: 8, hint: 'Buat 3-9 menit: cepat tapi masih lumayan teliti.' },
+      cepat: { movetime: 800, probeTime: 250, multipv: 12, multipvWasm: 6, specCands: 5, specMax: 8, specDeep: 12, hint: 'Buat 10 menit ke atas atau tanpa pemasa: lebih teliti, kandidat lebih banyak.' },
     },
     defaultSpeed: 'kilat',
     tier: { t1: 30, t2: 100, t3: 150 },
     bridgePingMs: 8000,
     bridgeAlivePingMs: 30000,
-    clockPollMs: 150,
+    clockPollMs: 200,
     clockSettleMs: 350,
     clockTickMs: 1300,
     premoveMissDelayMs: 900,
     speculate: true,
-    specWindow: 100,
+    specWindow: 160,
+    specBudgetMs: 25000,
+    specLowFrac: 0.6,
+    showPct: true,
     specWasmCands: 2,
     oppElo: null,
     arrow: { w: 0.22, head: 0.6, outline: 0.05, bodyOpacity: 0.7, glow: 0.07, glowColor: '#ffffff' },
@@ -421,6 +424,8 @@
     return (v > 0 ? '+' : '') + v.toFixed(2);
   }
 
+  const winPct = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+
   function eloPlan(elo, uciMin, uciMax, probeTime) {
     if (elo >= 3000) return { mode: 'full', probe: null, errChance: 0, maxRank: 0 };
     if (elo >= uciMin) {
@@ -663,7 +668,7 @@
       cands.forEach((c) => ev.set(c, trollEval(c, ctx, best)));
       const good = winning ? cands : cands.filter((c) => ev.get(c).b >= 20);
       if (good.length) {
-        pick = sampleWeighted(good, (c) => ev.get(pick).b - (winning ? 0 : 0.35 * c.loss), 15, rnd);
+        pick = sampleWeighted(good, (c) => ev.get(c).b - (winning ? 0 : 0.35 * c.loss), 15, rnd);
         tags = ev.get(pick).tags;
         trollWin = winning;
       } else {
@@ -979,7 +984,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid
   --accent:#3b82f6;--accent2:#8b5cf6;--glow:#60a5fa;--border:rgba(99,130,246,.28);
   --ok:#34d399;--warn:#fbbf24;--err:#f87171;
   --shadow:0 18px 50px rgba(0,0,0,.8),0 0 0 1px rgba(99,130,246,.26),0 0 46px rgba(59,92,246,.30);
-  font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--text);-webkit-text-size-adjust:100%}
+  font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--text);-webkit-text-size-adjust:100%}
 .arrows{position:fixed;pointer-events:none;z-index:2147483640;overflow:visible}
 .fab{position:fixed;width:48px;height:48px;border-radius:16px;
   background:radial-gradient(circle at 30% 22%,#1e40af 0%,#160f3d 45%,#04050d 78%);color:#dbeafe;
@@ -992,7 +997,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid
   border:1px solid rgba(139,92,246,.5);pointer-events:none;animation:ncpulse 3.4s ease-in-out infinite}
 @keyframes ncpulse{0%,100%{opacity:.2;transform:scale(.97)}50%{opacity:.85;transform:scale(1.04)}}
 @media (prefers-reduced-motion:reduce){.fab::after{animation:none;opacity:.5}}
-.panel{position:fixed;width:min(330px,calc(100vw - 12px));max-height:calc(100vh - 12px);max-height:calc(100dvh - 12px);overflow:auto;
+.panel{position:fixed;width:min(284px,calc(100vw - 12px));max-height:calc(100vh - 12px);max-height:calc(100dvh - 12px);overflow:auto;
   background:
     radial-gradient(1px 1px at 8% 5%,rgba(255,255,255,.85) 0%,transparent 100%),
     radial-gradient(1.4px 1.4px at 31% 3%,rgba(191,219,254,.75) 0%,transparent 100%),
@@ -1019,76 +1024,76 @@ button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid
 .panel::-webkit-scrollbar,pre::-webkit-scrollbar{width:6px;height:6px}
 .panel::-webkit-scrollbar-thumb,pre::-webkit-scrollbar-thumb{background:rgba(99,130,246,.5);border-radius:3px}
 .panel::-webkit-scrollbar-track,pre::-webkit-scrollbar-track{background:transparent}
-.hd{display:flex;align-items:center;gap:8px;padding:10px 10px 8px 12px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
+.hd{display:flex;align-items:center;gap:6px;padding:7px 8px 5px 10px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
   background:linear-gradient(180deg,rgba(59,130,246,.22),rgba(59,130,246,0));border-radius:18px 18px 0 0;
   box-shadow:inset 0 -1px 0 rgba(99,130,246,.18)}
 .hd:active{cursor:grabbing}
-.grip{width:14px;height:24px;flex:none;opacity:.9;background:radial-gradient(circle,#8fa3d8 1.6px,transparent 2.2px) 0 0/7px 8px}
-.title{flex:1;font:800 15px/1.2 system-ui,sans-serif;letter-spacing:.2em;text-transform:uppercase;
+.grip{width:12px;height:20px;flex:none;opacity:.9;background:radial-gradient(circle,#8fa3d8 1.6px,transparent 2.2px) 0 0/7px 8px}
+.title{flex:1;font:800 13px/1.2 system-ui,sans-serif;letter-spacing:.2em;text-transform:uppercase;
   background:linear-gradient(90deg,#dbeafe,#60a5fa 40%,#a78bfa 75%,#c084fc);-webkit-background-clip:text;background-clip:text;color:transparent;
   filter:drop-shadow(0 0 8px rgba(96,130,246,.65))}
-.ibtn{width:34px;height:34px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);
-  font:600 20px/1 system-ui,sans-serif;display:grid;place-items:center;cursor:pointer;padding:0;
+.ibtn{width:28px;height:28px;border-radius:9px;border:1px solid var(--border);background:var(--surface);color:var(--text);
+  font:600 18px/1 system-ui,sans-serif;display:grid;place-items:center;cursor:pointer;padding:0;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
-.ibtn:active{background:rgba(79,110,246,.34);border-color:rgba(139,92,246,.6);box-shadow:0 0 14px rgba(96,130,246,.5)}
-.body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:11px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:10px 14px;min-height:72px;
+.ibtn:active{background:rgba(79,110,246,.34);border-color:rgba(139,92,246,.6);box-shadow:0 0 14px rgba(96,165,250,.5)}
+.body{padding:2px 10px 10px;display:flex;flex-direction:column;gap:7px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px 11px;min-height:54px;
   box-shadow:inset 0 0 26px rgba(59,100,246,.10),inset 0 1px 0 rgba(255,255,255,.04)}
-.lbl{font-size:11.5px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
-.move{font:700 26px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin-top:2px;word-break:break-word;color:#f1f5ff;
+.lbl{font-size:10.5px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.move{font:700 21px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin-top:2px;word-break:break-word;color:#f1f5ff;
   text-shadow:0 0 14px rgba(96,165,250,.75),0 0 3px rgba(167,139,250,.5)}
-.sub{font-size:13px;color:var(--muted);margin-top:2px;white-space:pre-line}
+.sub{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:pre-line}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .val{font-weight:700;color:#dbeafe;text-shadow:0 0 10px rgba(96,165,250,.6)}
-.note{font-size:12px;color:var(--muted)}
-input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:34px;margin:0;background:transparent;cursor:pointer}
+.note{font-size:10.5px;color:var(--muted)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;margin:0;background:transparent;cursor:pointer}
 input[type=range]:disabled{opacity:.4;cursor:not-allowed}
 input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;
   background:linear-gradient(90deg,rgba(37,99,235,.7),rgba(139,92,246,.7));
   box-shadow:inset 0 0 0 1px rgba(99,130,246,.3),0 0 10px rgba(79,110,246,.28)}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:24px;height:24px;margin-top:-9px;border-radius:50%;
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;margin-top:-7px;border-radius:50%;
   border:2px solid #eef4ff;background:radial-gradient(circle at 35% 30%,#dbeafe,#6366f1 55%,#4338ca);
-  box-shadow:0 0 14px rgba(96,130,246,.9),0 0 2px rgba(255,255,255,.8)}
+  box-shadow:0 0 14px rgba(96,165,250,.9),0 0 2px rgba(255,255,255,.8)}
 input[type=range]::-moz-range-track{height:6px;border-radius:999px;
   background:linear-gradient(90deg,rgba(37,99,235,.7),rgba(139,92,246,.7));
   box-shadow:inset 0 0 0 1px rgba(99,130,246,.3),0 0 10px rgba(79,110,246,.28)}
-input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;border:2px solid #eef4ff;
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;border:2px solid #eef4ff;
   background:radial-gradient(circle at 35% 30%,#dbeafe,#6366f1 55%,#4338ca);
-  box-shadow:0 0 14px rgba(96,130,246,.9),0 0 2px rgba(255,255,255,.8)}
+  box-shadow:0 0 14px rgba(96,165,250,.9),0 0 2px rgba(255,255,255,.8)}
 .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;background:var(--surface);border:1px solid var(--border);padding:4px;border-radius:13px}
-.seg button{border:0;background:transparent;color:var(--text);padding:8px 4px;min-height:36px;border-radius:9px;font:600 14px system-ui,sans-serif;cursor:pointer}
+.seg button{border:0;background:transparent;color:var(--text);padding:5px 4px;min-height:30px;border-radius:9px;font:600 12.5px system-ui,sans-serif;cursor:pointer}
 .seg button:active{background:rgba(79,110,246,.22)}
 .seg button.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
-  box-shadow:0 0 16px rgba(96,130,246,.6),inset 0 1px 0 rgba(255,255,255,.28);text-shadow:0 0 8px rgba(255,255,255,.35)}
-.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
-.chip{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:9px 10px;background:var(--surface);border:1px solid var(--border);
-  border-radius:12px;cursor:pointer;font-size:12.5px;line-height:1.25;min-height:62px;position:relative}
+  box-shadow:0 0 16px rgba(96,165,250,.6),inset 0 1px 0 rgba(255,255,255,.28);text-shadow:0 0 8px rgba(255,255,255,.35)}
+.chips{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.chip{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:6px 8px;background:var(--surface);border:1px solid var(--border);
+  border-radius:11px;cursor:pointer;font-size:11px;line-height:1.2;min-height:46px;position:relative}
 .chip:has(input:checked){border-color:rgba(120,140,250,.6);box-shadow:inset 0 0 16px rgba(79,110,246,.18)}
-.chip input{position:absolute;top:8px;right:8px;width:19px;height:19px;accent-color:var(--accent2);margin:0}
-.dot{width:13px;height:13px;border-radius:50%;flex:none;filter:drop-shadow(0 0 5px rgba(255,255,255,.4))}
-.status{display:flex;gap:8px;align-items:flex-start;font-size:13px}
+.chip input{position:absolute;top:5px;right:5px;width:16px;height:16px;accent-color:var(--accent2);margin:0}
+.dot{width:11px;height:11px;border-radius:50%;flex:none;filter:drop-shadow(0 0 5px rgba(255,255,255,.4))}
+.status{display:flex;gap:7px;align-items:flex-start;font-size:11.5px}
 .led{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none;background:var(--muted)}
 .led.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}.led.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
 .led.err{background:var(--err);box-shadow:0 0 8px var(--err)}
 details{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0 12px}
 details[open]{padding-bottom:10px}
-summary{cursor:pointer;font-size:13px;color:var(--muted);padding:9px 0}
+summary{cursor:pointer;font-size:12px;color:var(--muted);padding:6px 0}
 details[open] summary{color:var(--text)}
 pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid rgba(99,130,246,.2);border-radius:9px;
-  font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto;color:#c5d0f0;
+  font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow:auto;color:#c5d0f0;
   scrollbar-width:thin;scrollbar-color:rgba(99,130,246,.55) transparent}
 .mini{display:flex;gap:6px;margin-top:8px}
 .mini button{flex:1;border:1px solid var(--border);border-radius:9px;background:rgba(59,100,246,.15);color:var(--text);padding:8px;min-height:34px;font:600 12px system-ui,sans-serif;cursor:pointer}
-.mini button:active{background:rgba(79,110,246,.36);box-shadow:0 0 12px rgba(96,130,246,.45)}
+.mini button:active{background:rgba(79,110,246,.36);box-shadow:0 0 12px rgba(96,165,250,.45)}
 .tbtn{width:100%;display:flex;justify-content:space-between;align-items:center;border:1px solid var(--border);background:var(--surface);color:var(--text);
-  padding:10px 12px;min-height:42px;border-radius:12px;font:600 14px system-ui,sans-serif;cursor:pointer}
+  padding:6px 10px;min-height:32px;border-radius:11px;font:600 12.5px system-ui,sans-serif;cursor:pointer}
 .tbtn:active{background:rgba(79,110,246,.22)}
 .tbtn .sw{width:38px;height:22px;border-radius:11px;background:rgba(141,155,201,.22);box-shadow:inset 0 0 0 1px rgba(99,130,246,.28);
   position:relative;flex:none;transition:background .15s,box-shadow .15s}
 .tbtn .sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#c5d0f0;
   transition:transform .15s,background .15s,box-shadow .15s}
-.tbtn.on{border-color:rgba(120,140,250,.65);box-shadow:0 0 18px rgba(96,130,246,.3),inset 0 0 20px rgba(79,110,246,.15)}
-.tbtn.on .sw{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 12px rgba(96,130,246,.8),inset 0 0 0 1px rgba(255,255,255,.18)}
+.tbtn.on{border-color:rgba(120,140,250,.65);box-shadow:0 0 18px rgba(96,165,250,.3),inset 0 0 20px rgba(79,110,246,.15)}
+.tbtn.on .sw{background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 12px rgba(96,165,250,.8),inset 0 0 0 1px rgba(255,255,255,.18)}
 .tbtn.on .sw::after{transform:translateX(16px);background:#fff;box-shadow:0 0 8px rgba(96,165,250,.95)}
 `;
 
@@ -1122,8 +1127,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
           '<div><div class="lbl" style="margin-bottom:6px">Panah</div><div class="chips">' +
             '<label class="chip"><input type="checkbox" data-tier="t1"><span class="dot" style="background:' + TIER_COLOR[1] + '"></span>Biru · Terbaik</label>' +
             '<label class="chip"><input type="checkbox" data-tier="t2"><span class="dot" style="background:' + TIER_COLOR[2] + '"></span>Ungu · Bagus</label>' +
-            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Merah · Biasa / bisa salah</label>' +
-          '</div><div class="note" style="margin-top:6px">Biru: paling disarankan. Ungu: agak bagus. Merah: biasa aja, bisa juga kurang atau salah.</div></div>' +
+            '<label class="chip"><input type="checkbox" data-tier="t3"><span class="dot" style="background:' + TIER_COLOR[3] + '"></span>Merah · Biasa</label>' +
+          '</div><div class="note" style="margin-top:6px">Biru: terbaik. Ungu: agak bagus. Merah: biasa aja / bisa salah.</div></div>' +
           '<div class="status"><span class="led" data-r="led"></span><span data-r="status">Mulai…</span></div>' +
           '<details><summary>Debug</summary><pre data-r="debug"></pre>' +
             '<div class="mini"><button data-act="copyfen">Salin FEN</button><button data-act="copylog">Salin log</button></div></details>' +
@@ -1151,7 +1156,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
 
     function clampPanel(x, y) {
       const vw = window.innerWidth, vh = window.innerHeight;
-      const pw = el.panel.offsetWidth || 330, ph = el.panel.offsetHeight || 400;
+      const pw = el.panel.offsetWidth || 284, ph = el.panel.offsetHeight || 380;
       return [clamp(x, 6, Math.max(6, vw - pw - 6)), clamp(y, 6, Math.max(6, vh - ph - 6))];
     }
 
@@ -1172,8 +1177,20 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     function savePos() { S.settings.pos = { x: UIstate.x, y: UIstate.y }; handlers.save(); }
     function savePanelPos() { PanelState.x = shown.x; PanelState.y = shown.y; S.settings.ppos = { x: shown.x, y: shown.y }; handlers.save(); }
 
+    function guardOpen(ms) {
+      const swallow = (e) => { e.stopImmediatePropagation(); e.preventDefault(); };
+      const evs = ['click', 'mousedown', 'mouseup', 'dblclick'];
+      el.panel.style.pointerEvents = 'none';
+      evs.forEach((t) => window.addEventListener(t, swallow, true));
+      setTimeout(() => {
+        el.panel.style.pointerEvents = '';
+        evs.forEach((t) => window.removeEventListener(t, swallow, true));
+      }, ms);
+    }
+
     function setOpen(v) {
       open = v;
+      if (v) guardOpen(450);
       el.panel.style.display = v ? 'block' : 'none';
       el.fab.style.display = v ? 'none' : 'grid';
       place();
@@ -1233,8 +1250,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
 
     const STYLE_NOTE = {
       bot: 'Langkah terbaik Stockfish, dingin dan akurat.',
-      human: 'Pemain pinter: main pembukaan beneran (e4 paling sering, kadang gambit), jarang salah. Makin tinggi Elo makin jarang meleset. Biru = langkah yang disarankan.',
-      troll: 'Nyepelein lawan: Q keluar awal, pion pinggir, niru langkah, nggak buru-buru skakmat, promosi jadi kuda. Langkahnya tetap bagus dan aman.',
+      human: 'Pemain pinter: pembukaan beneran (e4 paling sering, kadang gambit), jarang salah. Sesuai Elo.',
+      troll: 'Nyepelein lawan (Q keluar awal, niru langkah, nggak buru-buru skakmat), langkahnya tetap bagus.',
     };
     function eloText(v) { return v >= 3000 ? '3000+ (penuh)' : '~' + v; }
     function renderSettings() {
@@ -1248,21 +1265,21 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       el.stylenote.textContent = STYLE_NOTE[S.settings.style];
       el.premovebtn.classList.toggle('on', !!S.settings.premove);
       el.premovenote.textContent = S.settings.premove
-        ? 'Nyala: panah tebakan lawan tampil pas giliran lawan (buat premove). Tebakan meleset = panah hilang, muncul lagi setelah jeda.'
-        : 'Mati: panah muncul pas giliran kamu. Tebakan tetap disiapin diam-diam, jadi panahnya langsung keluar kalau lawan main sesuai tebakan.';
+        ? 'Nyala: panah tebakan lawan tampil pas giliran lawan. Meleset = panah hilang sebentar.'
+        : 'Mati: panah muncul pas giliran kamu. Tebakan tetap jalan diam-diam.';
       root.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', b.getAttribute('data-speed') === S.settings.speed));
       const sp = CFG.presets[S.settings.speed] || CFG.presets[CFG.defaultSpeed];
-      el.speednote.textContent = sp.hint + ' (~' + String(sp.movetime / 1000).replace('.', ',') + ' detik, ' + sp.multipv + ' kandidat)';
+      el.speednote.textContent = sp.hint;
       const lo = S.uciMin || 1320;
       el.elonote.textContent = auto && detected
-        ? 'Auto: ' + (S.autoInfo || '') + '. Elo tertinggi yang dipakai. Slider dimatikan.'
+        ? 'Auto: ' + (S.autoInfo || '') + '.'
         : auto
-          ? 'Auto nyala, tapi Elo belum kebaca dari halaman. Sementara pakai angka slider terakhir (slider dikunci).'
+          ? 'Auto nyala, Elo belum kebaca. Sementara pakai angka slider terakhir.'
           : eff >= 3000
         ? 'Kekuatan penuh, tanpa batas.'
         : eff < lo
-          ? 'Di bawah ~' + lo + ' ini TIRUAN KASAR (Skill Level rendah + peluang salah). Angkanya cuma perkiraan.'
-          : 'Pakai UCI_Elo bawaan Stockfish. Dihitung cuma ~0,3 detik, jadi angkanya perkiraan.';
+          ? 'Di bawah ~' + lo + ' ini tiruan kasar, angkanya perkiraan.'
+          : 'Pakai UCI_Elo bawaan Stockfish (perkiraan).';
     }
 
     el.slider.addEventListener('input', () => {
@@ -1307,7 +1324,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         'skor teb: kena ' + S.specStat.hit + ' | nyambung ' + S.specStat.adopt + ' | meleset ' + S.specStat.miss,
         'mesin   : Elo ' + (d.engElo || '-'),
         'auto elo: ' + (d.autoInfo || '-'),
-        'lawan   : Elo ' + (d.oppElo || '?') + ' | tebak ' + (d.specK || '-') + ' langkah (naik ' + S.specBoost + ')',
+        'lawan   : Elo ' + (d.oppElo || '?') + ' | tebak ' + (d.specK || '-') + ' langkah (selesai ' + (d.specDone || 0) + ')',
         'FEN     : ' + (d.fen || '-'),
         'engine  : ' + (d.engine || '-'),
         'terakhir: ' + (d.last || '-'),
@@ -1327,21 +1344,25 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       el.sub.textContent = sub || '';
     }
 
-    let lastArrows = null;
+    let lastArrows = null, arrowSeq = 0, drawnKey = '';
     function drawArrows(arrows, bd, flipped, board) {
-      lastArrows = arrows ? { arrows, flipped, board } : null;
+      lastArrows = arrows ? { arrows, flipped, board, id: ++arrowSeq } : null;
       layoutArrows();
     }
     function layoutArrows() {
       const svg = el.arrows;
-      while (svg.firstChild) svg.removeChild(svg.firstChild);
-      if (!lastArrows || !lastArrows.board || !lastArrows.board.isConnected) { svg.style.display = 'none'; return; }
+      const hide = () => { while (svg.firstChild) svg.removeChild(svg.firstChild); svg.style.display = 'none'; drawnKey = ''; };
+      if (!lastArrows || !lastArrows.board || !lastArrows.board.isConnected) { hide(); return; }
       const rect = lastArrows.board.getBoundingClientRect();
       const size = Math.min(rect.width, rect.height);
-      if (size < 40) { svg.style.display = 'none'; return; }
+      if (size < 40) { hide(); return; }
       svg.style.display = 'block';
       svg.style.left = rect.left + 'px'; svg.style.top = rect.top + 'px';
       svg.style.width = size + 'px'; svg.style.height = size + 'px';
+      const key = lastArrows.id + '|' + size.toFixed(1) + '|' + lastArrows.flipped;
+      if (key === drawnKey && svg.firstChild) return;
+      drawnKey = key;
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
       svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
       const sq = size / 8;
       const flipped = lastArrows.flipped;
@@ -1356,11 +1377,9 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       const mk = (tag, attrs) => { const e = document.createElementNS(NS_SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
       const defs = mk('defs', {});
       svg.appendChild(defs);
-      const glows = {};
-      const glowId = (color) => {
-        if (glows[color]) return glows[color];
-        const id = 'ncg' + Object.keys(glows).length;
-        const f = mk('filter', { id, filterUnits: 'userSpaceOnUse', x: -sq, y: -sq, width: size + sq * 2, height: size + sq * 2 });
+      const glowId = (idx, color, bb) => {
+        const id = 'ncg' + idx;
+        const f = mk('filter', { id, filterUnits: 'userSpaceOnUse', x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1] });
         f.appendChild(mk('feGaussianBlur', { in: 'SourceAlpha', stdDeviation: sq * AR.glow, result: 'b' }));
         f.appendChild(mk('feFlood', { 'flood-color': color, result: 'c' }));
         f.appendChild(mk('feComposite', { in: 'c', in2: 'b', operator: 'in', result: 'g' }));
@@ -1368,9 +1387,9 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         for (const inp of ['g', 'g', 'SourceGraphic']) mg.appendChild(mk('feMergeNode', { in: inp }));
         f.appendChild(mg);
         defs.appendChild(f);
-        glows[color] = id;
         return id;
       };
+      const labels = [];
       list.forEach((a, idx) => {
         const i1 = sqIdx(a.move.slice(0, 2)), i2 = sqIdx(a.move.slice(2, 4));
         const df = (i2 & 7) - (i1 & 7), dr = (i2 >> 3) - (i1 >> 3);
@@ -1391,14 +1410,17 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
           if (extra) { pg.setAttribute('stroke', color); pg.setAttribute('stroke-width', extra); pg.setAttribute('stroke-linejoin', 'round'); }
           return [pa, pg];
         };
+        const padB = head + sq * 0.5;
+        const xs = [p1[0], p2[0]].concat(mid ? [mid[0]] : []), ys = [p1[1], p2[1]].concat(mid ? [mid[1]] : []);
+        const bb = [Math.min.apply(null, xs) - padB, Math.min.apply(null, ys) - padB, Math.max.apply(null, xs) + padB, Math.max.apply(null, ys) + padB];
         const maskId = 'ncm' + idx;
-        const mask = mk('mask', { id: maskId, maskUnits: 'userSpaceOnUse', x: -sq, y: -sq, width: size + sq * 2, height: size + sq * 2 });
-        mask.appendChild(mk('rect', { x: -sq, y: -sq, width: size + sq * 2, height: size + sq * 2, fill: '#fff' }));
+        const mask = mk('mask', { id: maskId, maskUnits: 'userSpaceOnUse', x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1] });
+        mask.appendChild(mk('rect', { x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1], fill: '#fff' }));
         for (const e of body('#000', -0.6)) mask.appendChild(e);
         defs.appendChild(mask);
         const gcol = AR.glowColor === 'tier' ? TIER_COLOR[a.tier] : AR.glowColor;
         const g = mk('g', {});
-        const glowG = mk('g', { filter: 'url(#' + glowId(gcol) + ')' });
+        const glowG = mk('g', { filter: 'url(#' + glowId(idx, gcol, bb) + ')' });
         const ringG = mk('g', { mask: 'url(#' + maskId + ')' });
         for (const e of body('#ffffff', ol * 2)) ringG.appendChild(e);
         glowG.appendChild(ringG);
@@ -1407,7 +1429,20 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         for (const e of body(TIER_COLOR[a.tier], 0)) bodyG.appendChild(e);
         g.appendChild(bodyG);
         svg.appendChild(g);
+        if (CFG.showPct && a.label) labels.push({ a, p2 });
       });
+      for (const L of labels) {
+        const fs = sq * 0.19, bh = sq * 0.29;
+        const bw = Math.max(sq * 0.5, L.a.label.length * fs * 0.62 + sq * 0.18);
+        const cx = clamp(L.p2[0] + sq * 0.3, bw / 2 + 1, size - bw / 2 - 1);
+        const cy = clamp(L.p2[1] - sq * 0.32, bh / 2 + 1, size - bh / 2 - 1);
+        const g2 = mk('g', {});
+        g2.appendChild(mk('rect', { x: cx - bw / 2, y: cy - bh / 2, width: bw, height: bh, rx: bh * 0.4, fill: 'rgba(4,5,13,0.9)', stroke: TIER_COLOR[L.a.tier], 'stroke-width': Math.max(1, sq * 0.03) }));
+        const tx = mk('text', { x: cx, y: cy, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#ffffff', 'font-size': fs, 'font-weight': 700, 'font-family': 'system-ui,-apple-system,sans-serif' });
+        tx.textContent = L.a.label;
+        g2.appendChild(tx);
+        svg.appendChild(g2);
+      }
     }
 
     let raf = 0;
@@ -1433,12 +1468,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     };
   }
 
-  function onValidPage() {
+  function onChessPage() {
     return location.hostname === CFG.host && CFG.pathRe.test(location.pathname);
   }
 
   function init() {
-    if (!onValidPage()) return;
+    if (!onChessPage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1648,12 +1683,18 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       syncTurn();
     }
 
+    const clockCache = { els: [], at: 0 };
     function readClocks(board) {
-      let els = Array.from(document.querySelectorAll('.clock-component'));
-      if (!els.length) {
-        els = Array.from(document.querySelectorAll('[class*="clock"]'))
-          .filter((e) => parseClockText((e.textContent || '').replace(/\s+/g, '')) != null);
-        els = els.filter((e) => !els.some((o) => o !== e && o.contains(e)));
+      const now = Date.now();
+      let els = clockCache.els;
+      if (now - clockCache.at > (els.length ? 2500 : 1500) || els.some((e) => !e.isConnected)) {
+        els = Array.from(document.querySelectorAll('.clock-component'));
+        if (!els.length) {
+          els = Array.from(document.querySelectorAll('[class*="clock"]'))
+            .filter((e) => parseClockText((e.textContent || '').replace(/\s+/g, '')) != null);
+          els = els.filter((e) => !els.some((o) => o !== e && o.contains(e)));
+        }
+        clockCache.els = els; clockCache.at = now;
       }
       els = els.filter((e) => e.getClientRects().length > 0);
       let midY = null;
@@ -1841,6 +1882,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         if (wantBook) rq.multipv = Math.max(rq.multipv, usingWasm ? 8 : 10);
         if (opt.multipv) rq.multipv = opt.multipv;
         if (opt.probe !== undefined) rq.probe = opt.probe;
+        if (opt.movetime) rq.movetime = opt.movetime;
         return rq;
       };
       let res = null, via = '';
@@ -1924,8 +1966,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.dbg.fen = fenOpp;
       if (!S.bridgeChecked) { await pingBridge(); if (id !== S.reqId) return; }
       const pr = preset();
-      const baseK = pr.specCands || 3;
-      const K0 = Math.min(pr.specMax || baseK, baseK + S.specBoost);
+      const deep = pr.specDeep || 8;
+      const K0 = S.bridgeOk ? deep : Math.min(deep, CFG.specWasmCands);
       const oppElo = CFG.oppElo || readOppElo() || S.oppElo || null;
       if (oppElo) S.oppElo = oppElo;
       S.dbg.oppElo = oppElo ? oppElo + (CFG.oppElo ? ' (manual)' : '') : null;
@@ -1937,11 +1979,11 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         return;
       }
       if (!o1) return;
-      const K = o1.via === 'jembatan' ? K0 : Math.min(K0, CFG.specWasmCands);
+      const K = o1.via === 'jembatan' ? deep : Math.min(deep, CFG.specWasmCands);
       const lines = (o1.res.lines || []).slice().sort((x, y) => x.rank - y.rank);
       const sc = lines.map(scoreOf);
       const top = sc.length ? Math.max.apply(null, sc) : 0;
-      const win = oppElo ? Math.round(clamp(CFG.specWindow + (2800 - oppElo) / 8, CFG.specWindow, 350)) : CFG.specWindow;
+      const win = oppElo ? Math.round(clamp(CFG.specWindow + (2800 - oppElo) / 8, CFG.specWindow, 450)) : CFG.specWindow;
       const moves = [];
       const bm = o1.res.bestmove || (lines[0] && lines[0].move);
       if (bm) moves.push(bm);
@@ -1954,10 +1996,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         return;
       }
       S.dbg.pre = cands.map((m) => describeMove(bd, m)).join(' | ') + ' (' + o1.via + ')';
-      S.dbg.specK = cands.length;
+      S.dbg.specK = cands.length; S.dbg.specDone = 0;
       if (ui) ui.renderDebug();
+      const tStart = performance.now();
       for (let i = 0; i < cands.length; i++) {
         if (S.spec !== spec || spec.stop || id !== S.reqId) return;
+        if (performance.now() - tStart > CFG.specBudgetMs) { dbg('tebakan berhenti: batas waktu'); return; }
         const t1 = performance.now();
         const m = cands[i];
         const ap = applyMove(bd, m);
@@ -1975,8 +2019,15 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         const fenMe = buildFEN(ap.bd, S.me, rights2, ep2);
         const predText = describeMove(bd, m);
         if (i === 0 && vis()) status('warn', 'Premove: hitung saran kalau lawan main ' + predText + '…');
+        const cachedHit = resCache.get(resKey(fenMe));
         const p = (async () => {
-          const o2 = await runEngine(id, fenMe);
+          if (cachedHit) {
+            return {
+              res: cachedHit.res, fen: fenMe, via: cachedHit.via, ms: cachedHit.ms, bd: ap.bd, flipped: S.flipped, board: S.board,
+              pre: true, predText, rights: rights2, oppLast: { from: ap.from, to: ap.to, piece: ap.piece.toLowerCase() },
+            };
+          }
+          const o2 = await runEngine(id, fenMe, i >= 3 ? { movetime: Math.max(80, Math.round(pr.movetime * CFG.specLowFrac)) } : undefined);
           if (!o2 || !o2.res.lines || !o2.res.lines.length) return null;
           remember(fenMe, o2.res, o2.via, Math.round(performance.now() - t1));
           return {
@@ -1995,6 +2046,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         spec.inflight = null;
         if (last) { spec.cache.set(placement, last); if (i === 0) spec.first = last; }
         if (S.spec !== spec || spec.stop || id !== S.reqId) return;
+        S.dbg.specDone = i + 1;
         if (!last) continue;
         if (i === 0) {
           S.dbg.last = 'tebakan | ' + last.via + ' | ' + last.ms + ' ms | depth ' + last.res.depth + ' | ' + last.res.lines.length + ' kandidat';
@@ -2026,20 +2078,21 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         + (c === d.tiers[1] ? ' [B]' : c === d.tiers[2] ? ' [U]' : c === d.tiers[3] ? ' [M]' : '') + (c === d.pick ? ' *' : '')).join(' | ');
       ui.renderDebug();
       const arrows = [], seen = new Set();
-      const add = (move, tier, emph) => {
-        if (seen.has(move)) { dbg('panah dobel dibuang: ' + move + ' (tingkat ' + tier + ')'); return; }
-        seen.add(move); arrows.push({ move, tier, emph });
+      const pctLabel = (c) => (c.mate != null ? fmtEval(c.score, c.mate) : Math.round(winPct(c.score)) + '%');
+      const add = (c, tier, emph) => {
+        if (seen.has(c.move)) { dbg('panah dobel dibuang: ' + c.move + ' (tingkat ' + tier + ')'); return; }
+        seen.add(c.move); arrows.push({ move: c.move, tier, emph, label: pctLabel(c) });
       };
       for (const t of [1, 2, 3]) {
         const c = d.tiers[t];
-        if (c && S.settings.tiers['t' + t]) add(c.move, t, c === d.pick);
+        if (c && S.settings.tiers['t' + t]) add(c, t, c === d.pick);
       }
-      if (d.pickTier === 0 && S.settings.tiers.t3) add(d.pick.move, 0, true);
+      if (d.pickTier === 0 && S.settings.tiers.t3) add(d.pick, 0, true);
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
       const styleName = { bot: 'Bot', human: 'Manusia', troll: 'Troll' }[d.styleUsed];
       const tierName = {
-        1: d.pick === d.bestC ? 'terbaik' : (d.trollWin ? 'masih menang' : 'hampir terbaik'),
-        2: 'bagus', 3: 'biasa aja / bisa kurang', 0: 'di luar batas aman (tiruan Elo rendah)',
+        1: d.pick === d.bestC ? 'terbaik' : (d.trollWin ? 'masih menang' : 'disarankan, hampir terbaik'),
+        2: 'agak bagus', 3: 'biasa aja / bisa kurang', 0: 'bisa salah (di luar batas aman)',
       }[d.pickTier] || '';
       const ev = fmtEval(d.evalScore, d.evalMate);
       const sub = ['Eval ' + ev + (d.evalScore >= 150 ? ' (kamu unggul)' : d.evalScore <= -150 ? ' (kamu ketinggalan)' : ' (seimbang)'),
@@ -2057,7 +2110,16 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       if (S.observer) S.observer.disconnect();
       if (S.resizeObs) S.resizeObs.disconnect();
       S.board = board;
-      S.observer = new MutationObserver(() => scheduleSnapshot());
+      const relevantNode = (n) => !!(n && n.classList && (n.classList.contains('piece') || n.classList.contains('highlight')));
+      S.observer = new MutationObserver((muts) => {
+        for (const m of muts) {
+          if (m.type === 'attributes') { if (m.target === board || relevantNode(m.target)) { scheduleSnapshot(); return; } }
+          else {
+            for (const n of m.addedNodes) if (relevantNode(n)) { scheduleSnapshot(); return; }
+            for (const n of m.removedNodes) if (relevantNode(n)) { scheduleSnapshot(); return; }
+          }
+        }
+      });
       S.observer.observe(board, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
       if (typeof ResizeObserver === 'function') {
         S.resizeObs = new ResizeObserver(() => ui && ui.relayout());
@@ -2068,6 +2130,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.me = null; S.turn = null; S.boardTurn = null; S.boardTurnSrc = ''; S.arb.since = 0;
       S.clockMem = {}; S.needRun = true; S.flippedSeen = null; S.pendingShown = false;
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false; S.specBoost = 0; S.oppElo = null;
+      S.autoMe = null; S.autoOpp = null; S.autoInfo = '';
       S.premoveGhost = false;
       dbg('papan ketemu: ' + S.dbg.board);
       takeSnapshot(true);
@@ -2083,27 +2146,23 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
-      dbg('bukan halaman chess.com, script istirahat');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
-      dbg('balik ke halaman chess.com, script lanjut');
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!onValidPage()) { suspend(); return; }
-      if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
         if (S.board) { S.board = null; if (S.observer) S.observer.disconnect(); clearArrowsNow(); }
         status('warn', 'Papan nggak ketemu (selektor DOM mungkin berubah).');
         return;
       }
-      if (b !== S.board) attachBoard(b);
+      if (b !== S.board) attachBoard(b); else takeSnapshot();
       const gap = S.bridgeOk ? CFG.bridgePingMs * 4 : CFG.bridgePingMs;
       if (Date.now() - S.lastPing > (S.bridgeOk ? CFG.bridgeAlivePingMs : gap)) pingBridge();
     }
@@ -2136,7 +2195,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       save,
       close: shutdown,
       redraw: () => render(),
-      styleChanged: () => render(),
+      styleChanged: () => recompute(false),
       elo: () => curElo(),
       autoEloChanged: () => {
         refreshAutoElo(); save();
@@ -2169,9 +2228,10 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
 
   if (typeof globalThis.__CCH_TEST_CORE__ === 'function') {
     globalThis.__CCH_TEST_CORE__({
-      fenPlacement, boardFromPlacement, buildFEN, validateBoard, applyMove, attackersOf, isAttacked, attackedPieces, guessRights, intersectRights,
+      fenPlacement, buildFEN, validateBoard, applyMove, attackersOf, isAttacked, attackedPieces, guessRights, intersectRights,
       diffInfo, highlightMover, decide, eloPlan, scoreOf, fmtEval, describeMove, parseInfo, LineCollector, sqName, sqIdx,
       undevMinors, pieceCount, CFG, START_PLACEMENT, parseClockText, clockTurn, arbitrateTurn, arrowLane,
+      BOOK, bookLookup, boardFromPlacement, winPct,
     });
   }
   if (!globalThis.__CCH_NOSTART__) init();
