@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NebulaChess
 // @namespace    local.nebulachess
-// @version      1.0.1
-// @description  Chess Tool Assisten (Stockfish 19)
+// @version      1.8.0
+// @description  Move suggestions + arrows (Stockfish 19) + optional auto move, for chess.com games
 // @match        https://www.chess.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
@@ -23,7 +23,6 @@
   const CFG = {
     name: 'NebulaChess',
     host: 'www.chess.com',
-    pathRe: /.*/,
     bridge: 'http://127.0.0.1:8765',
     wasmSources: [
       'https://github.com/nmrugg/stockfish.js/releases/download/v19.0.1/',
@@ -151,6 +150,16 @@
   const VAL = { p: 100, n: 300, b: 300, r: 500, q: 900, k: 0 };
   const ATT_VAL = { p: 100, n: 300, b: 300, r: 500, q: 900, k: 2000 };
   const PROMO_NAME = { n: 'knight', r: 'rook', b: 'bishop', q: 'queen' };
+  const LITE = (() => {
+    try { return matchMedia('(pointer: coarse)').matches; } catch (e) { return false; }
+  })();
+  const LITE_CSS = `
+.fab{box-shadow:0 0 0 1px rgba(96,165,250,.5),0 4px 10px rgba(0,0,0,.6)}
+.fab::after{animation:none;opacity:.5}
+.panel{background:linear-gradient(160deg,#0d1546 0%,#060a22 55%,#04050d 100%);box-shadow:0 0 0 1px rgba(99,130,246,.3),0 8px 18px rgba(0,0,0,.65)}
+.title{filter:none}
+.root *{text-shadow:none!important}
+`;
   const START_PLACEMENT = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
   const KN = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
   const KG = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
@@ -170,6 +179,17 @@
       rows.push(s);
     }
     return rows.join('/');
+  }
+
+  function nearStart(bd) {
+    const sb = boardFromPlacement(START_PLACEMENT);
+    let diff = 0;
+    for (let i = 0; i < 64; i++) {
+      if (bd[i] === sb[i]) continue;
+      diff++;
+      if ((bd[i] && !isWhitePc(bd[i])) || (sb[i] && !isWhitePc(sb[i]))) return false;
+    }
+    return diff <= 2;
   }
 
   function boardFromPlacement(pl) {
@@ -1042,7 +1062,7 @@ button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid
 .sub{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:pre-line}
 .lrow{display:flex;justify-content:space-between;align-items:center;gap:6px;min-height:22px}
 .lact{display:flex;align-items:center;gap:7px}
-.val{font-weight:700;font-size:12px;color:#dbeafe;text-shadow:0 0 10px rgba(96,130,246,.6)}
+.val{font-weight:700;font-size:12px;color:#dbeafe;text-shadow:0 0 10px rgba(96,165,250,.6)}
 .lnk{border:0;background:transparent;color:#9db4ff;font:600 10.5px system-ui,sans-serif;padding:3px 0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .lnk:active{color:#fff}
 .hint{margin-top:6px;padding:0 2px;font-size:10.5px;line-height:1.45;color:var(--muted);white-space:pre-line}
@@ -1109,7 +1129,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     const root = host.attachShadow({ mode: 'open' });
     const chip = (t, c, label) => '<div class="chip"><input type="color" data-color="' + c + '" title="Pick color">' +
       '<label class="ck"><input type="checkbox" data-tier="' + t + '"><span>' + label + '</span></label></div>';
-    root.innerHTML = '<style>' + CSS + '</style>' +
+    root.innerHTML = '<style>' + CSS + (LITE ? LITE_CSS : '') + '</style>' +
       '<div class="root">' +
       '<svg class="arrows" xmlns="' + NS_SVG + '"></svg>' +
       '<div class="fab" part="fab" title="' + CFG.name + '">♞︎</div>' +
@@ -1298,8 +1318,10 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       setTip('autospeed', "Picks Bullet, Blitz or Rapid from the game's starting clock (no clock = Rapid). If the script loads mid-game it may pick a faster mode than the real one. Locks the speed buttons." +
         (aSpd ? (S.speedInfo ? ' Now: ' + S.speedInfo + '.' : ' Not detected yet, using the selected speed.') : ''));
       setTip('style', STYLE_TIP);
-      setTip('premove', "While the opponent is thinking, predicts their likely moves and prepares your reply to each.\nOn: shows those arrows right away so you can premove. Off: arrows appear on your turn only, but a correct prediction still shows instantly.");
-      setTip('automove', 'Plays the suggested move for you by clicking the board on your turn. If nothing moves, chess.com ignored the clicks, so play the arrow yourself.');
+      setTip('premove', "While the opponent is thinking, predicts their likely moves and prepares your reply to each.\nOn: shows those arrows right away so you can premove. Off: " + (LITE
+        ? "the engine rests during the opponent's turn, which keeps the phone cool and the page smooth. Arrows appear on your turn only."
+        : "arrows appear on your turn only, but a correct prediction still shows instantly."));
+      setTip('automove', 'Plays the suggested move for you by clicking the board on your turn. If nothing moves, the site ignored the clicks, so play the arrow yourself.');
       setTip('arrows', 'Best (blue): the top move. Good (purple): a solid alternative. Weak (red): a weaker option or a possible mistake.\nTap a color to change it, tick the box to show that arrow. The % on an arrow is your winning chance after that move.');
     }
 
@@ -1354,7 +1376,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       const lines = [
         'page      : ' + (d.path || '-'),
         'board     : ' + (d.board || '-'),
-        'pieces    : ' + (d.pieces == null ? '-' : d.pieces) + ' | flipped: ' + (d.flipped ? 'yes' : 'no'),
+        'pieces    : ' + (d.pieces == null ? '-' : d.pieces) + ' | flipped: ' + (d.flipped ? 'yes' : 'no') + ' (' + (d.flipSrc || '-') + ')',
         'turn      : ' + (d.turn || '?') + ' (' + (d.turnSrc || '-') + ') | you: ' + (d.me || '-'),
         'clock     : ' + (d.clock || '-'),
         'candidates: ' + (d.cands || '-'),
@@ -1366,6 +1388,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         'opp Elo   : ' + (d.oppElo || '?') + ' (used for predictions) | predicting ' + (d.specK || '-') + ' moves, done ' + (d.specDone || 0),
         'FEN       : ' + (d.fen || '-'),
         'engine    : ' + (d.engine || '-'),
+        'mode      : ' + (LITE ? 'light (touch screen)' : 'full'),
         'last      : ' + (d.last || '-'),
         'error     : ' + (d.err || '-'),
         '--- log ---',
@@ -1452,18 +1475,24 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         const padB = head + sq * 0.5;
         const xs = [p1[0], p2[0]].concat(mid ? [mid[0]] : []), ys = [p1[1], p2[1]].concat(mid ? [mid[1]] : []);
         const bb = [Math.min.apply(null, xs) - padB, Math.min.apply(null, ys) - padB, Math.max.apply(null, xs) + padB, Math.max.apply(null, ys) + padB];
-        const maskId = 'ncm' + idx;
-        const mask = mk('mask', { id: maskId, maskUnits: 'userSpaceOnUse', x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1] });
-        mask.appendChild(mk('rect', { x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1], fill: '#fff' }));
-        for (const e of body('#000', -0.6)) mask.appendChild(e);
-        defs.appendChild(mask);
-        const gcol = AR.glowColor === 'tier' ? TIER_COLOR[a.tier] : AR.glowColor;
         const g = mk('g', {});
-        const glowG = mk('g', { filter: 'url(#' + glowId(idx, gcol, bb) + ')' });
-        const ringG = mk('g', { mask: 'url(#' + maskId + ')' });
-        for (const e of body('#ffffff', ol * 2)) ringG.appendChild(e);
-        glowG.appendChild(ringG);
-        g.appendChild(glowG);
+        if (LITE) {
+          const ringG = mk('g', { opacity: 0.9 });
+          for (const e of body('#ffffff', ol * 2)) ringG.appendChild(e);
+          g.appendChild(ringG);
+        } else {
+          const maskId = 'ncm' + idx;
+          const mask = mk('mask', { id: maskId, maskUnits: 'userSpaceOnUse', x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1] });
+          mask.appendChild(mk('rect', { x: bb[0], y: bb[1], width: bb[2] - bb[0], height: bb[3] - bb[1], fill: '#fff' }));
+          for (const e of body('#000', -0.6)) mask.appendChild(e);
+          defs.appendChild(mask);
+          const gcol = AR.glowColor === 'tier' ? TIER_COLOR[a.tier] : AR.glowColor;
+          const glowG = mk('g', { filter: 'url(#' + glowId(idx, gcol, bb) + ')' });
+          const ringG = mk('g', { mask: 'url(#' + maskId + ')' });
+          for (const e of body('#ffffff', ol * 2)) ringG.appendChild(e);
+          glowG.appendChild(ringG);
+          g.appendChild(glowG);
+        }
         const bodyG = mk('g', { opacity: AR.bodyOpacity });
         for (const e of body(TIER_COLOR[a.tier], 0)) bodyG.appendChild(e);
         g.appendChild(bodyG);
@@ -1507,12 +1536,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     };
   }
 
-  function isChessPage() {
-    return location.hostname === CFG.host;
+  function onGamePage() {
+    return location.hostname === CFG.host && (/\/game\//.test(location.pathname) || /\/play\//.test(location.pathname) || /\/game(\/|$)/.test(location.pathname));
   }
 
   function init() {
-    if (!isChessPage()) return;
+    if (!onGamePage()) return;
 
     const S = {
       settings: Object.assign({}, DEFAULTS, store.get('cch_settings', {})),
@@ -1592,6 +1621,29 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       return document.querySelector('wc-chess-board') || document.querySelector('chess-board') ||
         document.querySelector('#board-single') || document.querySelector('.board');
     }
+    function readOrientation(board) {
+      const br = board.getBoundingClientRect();
+      const size = Math.min(br.width, br.height);
+      if (size < 80) return null;
+      const sq = size / 8;
+      let normal = 0, flipped = 0;
+      for (const el of board.querySelectorAll('.piece')) {
+        let f = 0, r = 0;
+        for (const c of el.classList) {
+          if (c.length === 9 && c.indexOf('square-') === 0) { f = +c[7]; r = +c[8]; }
+        }
+        if (f < 1 || f > 8 || r < 1 || r > 8) continue;
+        const pr = el.getBoundingClientRect();
+        if (!(pr.width > 0)) continue;
+        const col = Math.floor((pr.left + pr.width / 2 - br.left) / sq);
+        const row = Math.floor((pr.top + pr.height / 2 - br.top) / sq);
+        if (col === f - 1 && row === 8 - r) normal++;
+        else if (col === 8 - f && row === r - 1) flipped++;
+      }
+      if (normal + flipped < 4 || normal === flipped) return null;
+      return flipped > normal;
+    }
+
     function readSnapshot(board) {
       const bd = new Array(64).fill('');
       let dup = false, count = 0;
@@ -1618,7 +1670,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
           }
         }
       }
-      return { bd, dup, count, hl, flipped: board.classList.contains('flipped') };
+      const geo = readOrientation(board);
+      return { bd, dup, count, hl, flipped: geo == null ? board.classList.contains('flipped') : geo, flipSrc: geo == null ? 'class' : 'pieces' };
     }
 
     function scheduleSnapshot(delay) {
@@ -1666,8 +1719,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     function processSnapshot(snap, placement) {
       const prev = S.prevBd;
       const changedPos = !prev || fenPlacement(prev) !== placement;
-      S.flipped = snap.flipped;
-      if (S.me == null || placement === START_PLACEMENT) S.me = snap.flipped ? 'b' : 'w';
+      S.flipped = snap.flipped; S.dbg.flipSrc = snap.flipSrc;
+      if (S.me == null || nearStart(snap.bd)) S.me = snap.flipped ? 'b' : 'w';
       S.dbg.me = S.me === 'w' ? 'white' : 'black';
       if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
 
@@ -1916,7 +1969,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         S.specHit = null; S.specAdopt = null; S.preMiss = false; S.spec = null;
         if (S.settings.premove) { ui.setSuggestion('—', "Opponent's turn. Predicting their move…"); status('warn', "Predicting the opponent's move…"); }
         else { ui.setSuggestion('—', "Opponent's turn"); status('ok', "Opponent's turn."); }
-        if (CFG.speculate) await speculate(id);
+        if (specAllowed()) await speculate(id);
         return;
       }
       const miss = S.preMiss; S.preMiss = false; S.specHit = null; S.specAdopt = null;
@@ -2034,6 +2087,10 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.dbg.last = via + ' | ' + S.last.ms + ' ms | depth ' + res.depth + ' | ' + res.lines.length + ' candidates';
       remember(fen, res, via, S.last.ms);
       render();
+    }
+
+    function specAllowed() {
+      return CFG.speculate && (!LITE || !!S.settings.premove);
     }
 
     async function speculate(id) {
@@ -2299,20 +2356,20 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
       clearTimeout(S.snapTimer);
       if (ui) { ui.drawArrows(null); ui.setVisible(false); }
-      dbg('not a chess page, script paused');
+      dbg('not a game page, script paused');
     }
     function resume() {
       if (!S.suspended) return;
       S.suspended = false; S.sig = ''; S.prevBd = null;
       if (ui) ui.setVisible(true);
-      dbg('back on the chess page, script resumed');
+      dbg('back on a game page, script resumed');
       preloadBuiltin();
     }
 
     function tick() {
       if (S.dead) return;
       S.dbg.path = location.pathname;
-      if (!isChessPage()) { suspend(); return; }
+      if (!onGamePage()) { suspend(); return; }
       if (S.suspended) resume();
       const b = findBoard();
       if (!b) {
@@ -2342,7 +2399,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         if (!S.dbg.fen || S.dbg.err) return;
         if (clearFirst) cancelAnalysis(); else S.reqId++;
         analyze(S.reqId, S.dbg.fen);
-      } else if (CFG.speculate) {
+      } else if (specAllowed()) {
         cancelAnalysis(); S.spec = null;
         speculate(S.reqId);
       }
