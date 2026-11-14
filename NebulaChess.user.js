@@ -1643,6 +1643,34 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       return flipped > normal;
     }
 
+    function visualBottom(board) {
+      const br = board.getBoundingClientRect();
+      const size = Math.min(br.width, br.height);
+      if (size < 80) return null;
+      let w = 0, wy = 0, b = 0, by = 0;
+      for (const el of board.querySelectorAll('.piece')) {
+        let c = null;
+        for (const k of el.classList) if (k.length === 2 && /^[wb][pnbrqk]$/.test(k)) c = k[0];
+        if (!c) continue;
+        const r = el.getBoundingClientRect();
+        if (!(r.width > 0)) continue;
+        const y = r.top + r.height / 2;
+        if (c === 'w') { w++; wy += y; } else { b++; by += y; }
+      }
+      if (w < 4 || b < 4) return null;
+      const d = wy / w - by / b;
+      if (Math.abs(d) < size / 8) return null;
+      return d > 0 ? 'w' : 'b';
+    }
+
+    function detectFlipped(board, count) {
+      const vb = count >= 28 ? visualBottom(board) : null;
+      if (vb) return { flipped: vb === 'b', src: 'visual', vb };
+      const geo = readOrientation(board);
+      if (geo != null) return { flipped: geo, src: 'pieces', vb: null };
+      return { flipped: board.classList.contains('flipped'), src: 'class', vb: null };
+    }
+
     function readSnapshot(board) {
       const bd = new Array(64).fill('');
       let dup = false, count = 0;
@@ -1669,8 +1697,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
           }
         }
       }
-      const geo = readOrientation(board);
-      return { bd, dup, count, hl, flipped: geo == null ? board.classList.contains('flipped') : geo, flipSrc: geo == null ? 'class' : 'pieces' };
+      const f = detectFlipped(board, count);
+      return { bd, dup, count, hl, flipped: f.flipped, flipSrc: f.src, vb: f.vb };
     }
 
     function scheduleSnapshot(delay) {
@@ -1715,11 +1743,35 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       return src;
     }
 
+    function bottomColor(snap) {
+      if (snap.vb) return snap.vb;
+      try {
+        const c = readClocks(S.board).find((x) => x.pos === 'bottom' && x.color);
+        if (c) return c.color;
+      } catch (e) { }
+      return snap.flipped ? 'b' : 'w';
+    }
+
     function processSnapshot(snap, placement) {
       const prev = S.prevBd;
       const changedPos = !prev || fenPlacement(prev) !== placement;
+      const newGame = changedPos && !!prev && nearStart(snap.bd) && !nearStart(prev);
+      const prevMe = S.me;
+      if (newGame) {
+        S.me = null; S.rights = null; S.lastMove = { w: null, b: null };
+        S.specBoost = 0; S.clockMax = 0; S.clockMem = {}; S.oppElo = null;
+        S.autoMe = null; S.autoOpp = null; S.autoInfo = ''; S.autoSpeedKey = null; S.speedInfo = '';
+        if (S.spec) S.spec.stop = true;
+        S.spec = null; S.specHit = null; S.specAdopt = null; S.preMiss = false;
+        resetAutoMove();
+        cancelAnalysis();
+        dbg('new game detected');
+        [150, 400, 900, 1600].forEach((ms) => setTimeout(() => { if (!S.dead && !S.suspended) takeSnapshot(true); }, ms));
+      }
       S.flipped = snap.flipped; S.dbg.flipSrc = snap.flipSrc;
-      if (S.me == null || nearStart(snap.bd)) S.me = snap.flipped ? 'b' : 'w';
+      if (S.me == null || nearStart(snap.bd)) S.me = bottomColor(snap);
+      if (snap.vb && snap.count >= 30 && S.me !== snap.vb) { S.me = snap.vb; S.needRun = true; dbg('color corrected from the board: ' + S.me); }
+      if (newGame) S.holdUntil = S.me === prevMe ? Date.now() + 800 : 0;
       S.dbg.me = S.me === 'w' ? 'white' : 'black';
       if (S.flippedSeen !== snap.flipped) { S.flippedSeen = snap.flipped; S.needRun = true; }
 
@@ -1731,6 +1783,7 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       S.premoveGhost = false;
 
       if (changedPos) {
+        resetAutoMove();
         const spec = S.spec;
         const shown = !!(S.last && S.last.pre);
         const hitLast = spec ? spec.cache.get(placement) || null : null;
@@ -1939,6 +1992,12 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     }
 
     async function onPositionReady() {
+      if (S.holdUntil && Date.now() < S.holdUntil) {
+        clearTimeout(S.holdTimer);
+        S.holdTimer = setTimeout(() => { if (!S.dead && !S.suspended) onPositionReady(); }, S.holdUntil - Date.now() + 20);
+        ui.setSuggestion('—', 'Checking which side you play…');
+        return;
+      }
       refreshAutoElo();
       refreshAutoSpeed();
       const turnMe = !!S.turn && S.turn === S.me;
@@ -2266,26 +2325,35 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       emit(x, y, ['pointerup', 'mouseup', 'click'], 0);
     }
 
+    const humanTiming = () => ({
+      bullet: { think: [60, 260], hold: [25, 55], gap: [35, 100], promo: [40, 120] },
+      blitz: { think: [200, 800], hold: [35, 75], gap: [60, 170], promo: [60, 180] },
+      rapid: { think: [450, 1700], hold: [40, 90], gap: [90, 250], promo: [80, 240] },
+    })[curSpeed()] || { think: [200, 800], hold: [35, 75], gap: [60, 170], promo: [60, 180] };
+
+    const humanRnd = (r) => r[0] + Math.random() * (r[1] - r[0]);
+
     function humanClickGap() {
-      return Math.random() < 0.1 ? 400 + Math.random() * 400 : 120 + Math.random() * 260;
+      return humanRnd(humanTiming().gap) * (Math.random() < 0.08 ? 2.5 : 1);
     }
 
     async function playMoveHuman(uci) {
+      const t = humanTiming();
       const from = pointOnSquare(sqIdx(uci.slice(0, 2)));
-      await pressAt(from[0], from[1], 45 + Math.random() * 85);
+      await pressAt(from[0], from[1], humanRnd(t.hold));
       await sleep(humanClickGap());
       if (S.dead || S.suspended || !S.settings.autoMove) throw new Error('stopped');
       const to = pointOnSquare(sqIdx(uci.slice(2, 4)));
-      await pressAt(to[0], to[1], 45 + Math.random() * 85);
+      await pressAt(to[0], to[1], humanRnd(t.hold));
       if (!uci[4]) return;
       const want = S.me + uci[4];
-      for (let i = 0; i < 15; i++) {
-        await sleep(100);
+      for (let i = 0; i < 20; i++) {
+        await sleep(60);
         const el = document.querySelector('.promotion-window [class~="' + want + '"]');
         if (el) {
           const r = el.getBoundingClientRect();
-          await sleep(60 + Math.random() * 140);
-          await pressAt(r.left + r.width * (0.35 + Math.random() * 0.3), r.top + r.height * (0.35 + Math.random() * 0.3), 45 + Math.random() * 85);
+          await sleep(humanRnd(t.promo));
+          await pressAt(r.left + r.width * (0.35 + Math.random() * 0.3), r.top + r.height * (0.35 + Math.random() * 0.3), humanRnd(t.hold));
           return;
         }
       }
@@ -2293,27 +2361,25 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
     }
 
     function humanThinkMs(move, L, d) {
-      const base = ({ bullet: [350, 1100], blitz: [800, 2600], rapid: [1500, 5200] })[curSpeed()] || [800, 2600];
-      let ms = base[0] + Math.random() * (base[1] - base[0]);
+      const t = humanTiming();
+      let ms = humanRnd(t.think);
       let k = 1;
       const to = sqIdx(move.slice(2, 4));
       const ol = L.oppLast;
-      if (ol && ol.to === to) k *= 0.55;
-      if (L.hit) k *= 0.75;
+      if (ol && ol.to === to) k *= 0.6;
+      if (L.hit) k *= 0.8;
       try {
         if (pieceCount(L.bd) >= 28 && undevMinors(L.bd, S.me === 'w') >= 2) k *= 0.6;
         if (d && d.cs && d.cs.length > 1) {
           const best = Math.max.apply(null, d.cs.map((c) => c.score));
           const close = d.cs.filter((c) => c.mate == null && Math.abs(best - c.score) <= 60).length;
-          k *= 0.85 + 0.12 * Math.min(close, 4);
+          k *= 0.9 + 0.1 * Math.min(close, 4);
         }
       } catch (e) { }
       const r = Math.random();
-      if (r < 0.12) k *= 2 + Math.random() * 1.5;
-      else if (r < 0.3) k *= 0.5 + Math.random() * 0.2;
-      ms *= k;
-      ms -= Math.min(L.ms || 0, ms * 0.6);
-      return Math.max(250, Math.min(ms, base[1] * 3.5));
+      if (r < 0.1) k *= 1.8 + Math.random() * 1.2;
+      else if (r < 0.28) k *= 0.6;
+      return Math.max(t.think[0] * 0.6, Math.min(ms * k, t.think[1] * 3));
     }
 
     function scheduleAutoMove(move, L, d) {
@@ -2329,11 +2395,20 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
       return true;
     }
 
+    function resetAutoMove() {
+      if (S.am && S.am.timer) clearTimeout(S.am.timer);
+      S.am = { fen: '', move: '', timer: 0, done: false };
+    }
+
     function runAutoMove(fen, move) {
       const am = S.am;
       am.timer = 0;
       const placement = fen.split(' ')[0];
       if (S.dead || S.suspended || !S.settings.autoMove || S.turn !== S.me || !S.board || !S.board.isConnected || !S.bd || fenPlacement(S.bd) !== placement) return;
+      const cur = detectFlipped(S.board, S.dbg.pieces || 32);
+      if (cur.flipped !== S.flipped) { resetAutoMove(); takeSnapshot(true); return; }
+      const pcFrom = S.bd[sqIdx(move.slice(0, 2))];
+      if (!pcFrom || isWhitePc(pcFrom) !== (S.me === 'w')) { dbg('auto move skipped, not my piece: ' + move); return; }
       am.done = true;
       playMove(move, !!am.human).then(() => {
         setTimeout(() => {
@@ -2381,6 +2456,8 @@ pre{margin:8px 0 0;padding:8px 10px;background:rgba(4,5,13,.7);border:1px solid 
         if (c && S.settings.tiers['t' + t]) add(c, t, c === d.pick);
       }
       if (d.pickTier === 0 && S.settings.tiers.t3) add(d.pick, 0, true);
+      if (S.settings.autoMove && !L.pre) { arrows.length = 0; seen.clear(); add(d.pick, d.pickTier, true); }
+      else if (!seen.has(d.pick.move)) add(d.pick, d.pickTier, true);
       ui.drawArrows(arrows, L.bd, L.flipped, L.board);
       const styleName = { bot: 'Bot', human: 'Human', troll: 'Troll' }[d.styleUsed];
       const tierName = {
